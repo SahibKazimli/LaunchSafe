@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block title %}Security Report — AuditShield{% endblock %}
+{% block title %}Security Report — LaunchSafe{% endblock %}
 
 {% block nav_extra %}
-<a href="/" class="btn-ghost">← New scan</a>
+<a href="/" class="btn-ghost">New scan</a>
 {% endblock %}
 
 {% block extra_styles %}
@@ -32,9 +32,6 @@
   .comp-gap { background: var(--red); } .comp-partial { background: var(--yellow); } .comp-ok { background: var(--green); }
   .compliance-name { color: var(--text); flex: 1; }
   .compliance-status { color: var(--muted); font-family: var(--mono); font-size: 10px; }
-
-  .module-row-mini { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
-  .module-row-mini span:last-child { font-family: var(--mono); color: var(--accent); font-size: 11px; }
 
   .report-main { display: flex; flex-direction: column; gap: 16px; }
   .report-top { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 8px; }
@@ -134,16 +131,6 @@
         </div>
       </div>
 
-      <div class="sidebar-section">
-        <h4>Modules run</h4>
-        {% set icons = {'secrets':'🔑','auth':'🔐','api':'🌐','cloud':'☁','privacy':'🛡','deps':'📦'} %}
-        {% for mod in scan.modules_done %}
-        <div class="module-row-mini">
-          <span>{{ icons.get(mod.id, '·') }} {{ mod.name }}</span>
-          <span>{{ mod.count }}</span>
-        </div>
-        {% endfor %}
-      </div>
     </aside>
 
     <!-- ── MAIN ── -->
@@ -151,9 +138,9 @@
       <div class="report-top">
         <div>
           <h2>Security report</h2>
-          <p>Target: {{ scan.target }} · {{ total }} findings across {{ scan.modules_done|length }} modules</p>
+          <p>Target: {{ scan.target }} · {{ total }} findings</p>
         </div>
-        <a href="/api/findings/{{ scan.get('id', '') }}" class="btn-ghost" target="_blank">↓ JSON export</a>
+        <a href="/api/findings/{{ scan.get('id', '') }}" class="btn-ghost" target="_blank">JSON export</a>
       </div>
 
       <div class="findings-section">

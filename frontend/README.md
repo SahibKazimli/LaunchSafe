@@ -1,4 +1,4 @@
-# AuditShield — Startup Security Auditor
+# LaunchSafe — Startup Security Auditor
 
 A Python + FastAPI web application that audits startup codebases for:
 - Hardcoded secrets & credentials

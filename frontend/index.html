@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}AuditShield — Startup Security Auditor{% endblock %}
+{% block title %}LaunchSafe — Startup Security Auditor{% endblock %}
 
 {% block extra_styles %}
 <style>
@@ -67,18 +67,17 @@
     <p class="hero-sub">Upload your codebase or paste a GitHub URL. Get a full security audit in under 2 minutes — secrets, auth gaps, API risks, cloud misconfigs, and compliance readiness.</p>
 
     <div class="modules-preview">
-      <div class="mod-chip"><strong>🔑 Secret detection</strong>Keys, tokens, creds</div>
-      <div class="mod-chip"><strong>🔐 Auth review</strong>MFA, RBAC, sessions</div>
-      <div class="mod-chip"><strong>🌐 API security</strong>Injection, CORS, rate limits</div>
-      <div class="mod-chip"><strong>☁ Cloud config</strong>IAM, S3, open ports</div>
-      <div class="mod-chip"><strong>🛡 Privacy</strong>GDPR, CCPA, PII</div>
-      <div class="mod-chip"><strong>📦 Dependencies</strong>CVEs, known vulns</div>
+      <div class="mod-chip"><strong>Secret detection</strong>Keys, tokens, creds</div>
+      <div class="mod-chip"><strong>Auth review</strong>MFA, RBAC, sessions</div>
+      <div class="mod-chip"><strong>API security</strong>Injection, CORS, rate limits</div>
+      <div class="mod-chip"><strong>Cloud config</strong>IAM, S3, open ports</div>
+      <div class="mod-chip"><strong>Privacy</strong>GDPR, CCPA, PII</div>
+      <div class="mod-chip"><strong>Dependencies</strong>CVEs, known vulns</div>
     </div>
 
     <form id="scan-form" method="POST" action="/start-scan" enctype="multipart/form-data">
       <div class="upload-zone" id="dropzone">
         <input type="file" name="file" id="file-input" accept=".zip">
-        <div class="upload-icon">⬆</div>
         <h3>Drop your codebase here</h3>
         <p>ZIP archive · .env files · Terraform configs · OpenAPI specs</p>
       </div>
@@ -91,7 +90,7 @@
         <button type="submit" class="btn-primary">Scan</button>
       </div>
 
-      <button type="submit" class="btn-primary scan-btn-full">Run full security audit →</button>
+      <button type="submit" class="btn-primary scan-btn-full">Run full security audit</button>
     </form>
 
     <div class="trust-row">
@@ -121,7 +120,7 @@
   function showFile(f) {
     if (!f) return;
     label.style.display = 'block';
-    label.textContent = '✓ ' + f.name + ' (' + (f.size / 1024).toFixed(0) + ' KB)';
+    label.textContent = f.name + ' (' + (f.size / 1024).toFixed(0) + ' KB)';
   }
 
   document.getElementById('scan-form').addEventListener('submit', async (e) => {

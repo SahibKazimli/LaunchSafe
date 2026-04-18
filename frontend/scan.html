@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Scanning… — AuditShield{% endblock %}
+{% block title %}Scanning… — LaunchSafe{% endblock %}
 
 {% block extra_styles %}
 <style>
@@ -23,19 +23,6 @@
   .recon-tags { display: flex; flex-wrap: wrap; gap: 6px; }
   .recon-tag { font-family: var(--mono); font-size: 10px; padding: 3px 8px; border: 1px solid var(--border2); border-radius: 4px; color: var(--muted); }
   .recon-tag.on { color: var(--accent); border-color: rgba(200,241,53,0.4); background: rgba(200,241,53,0.06); }
-
-  .scan-modules { display: flex; flex-direction: column; gap: 8px; margin-bottom: 24px; }
-  .module-row {
-    display: flex; align-items: center; gap: 14px;
-    padding: 12px 16px; border-radius: 10px; border: 1px solid rgba(6,214,160,0.3);
-    background: rgba(6,214,160,0.04);
-    animation: fadeUp .25s ease both;
-  }
-  .module-icon { width: 28px; height: 28px; border-radius: 6px; background: var(--bg3); display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
-  .module-info { flex: 1; }
-  .module-name { font-size: 13px; font-weight: 500; color: var(--text); }
-  .module-detail { font-size: 11px; color: var(--muted); font-family: var(--mono); margin-top: 2px; }
-  .module-count { font-family: var(--mono); font-size: 11px; color: var(--green); }
 
   .working-row {
     display: flex; align-items: center; gap: 12px;
@@ -105,8 +92,6 @@
       <div class="recon-tags" id="recon-tags"></div>
     </div>
 
-    <div class="scan-modules" id="module-list"></div>
-
     <div id="working" class="working-row">
       <div class="spinner"></div>
       <div class="working-label" id="working-label">Waiting for first tool call…</div>
@@ -123,16 +108,10 @@
 {% block scripts %}
 <script>
   const SCAN_ID = "{{ scan_id }}";
-  const ICONS = {
-    recon: '🔍', secrets: '🔑', auth: '🔐', api: '🌐',
-    cloud: '☁', privacy: '🛡', deps: '📦',
-    ai_deep: '🤖', ai_cicd: '⚙', ai_auth: '🔒'
-  };
 
   const startedAt = Date.now();
   let pollInterval = setInterval(poll, 1500);
   let tickInterval = setInterval(tick, 1000);
-  const renderedKeys = new Set();
   let lastEventCount = 0;
 
   function tick() {
@@ -156,32 +135,6 @@
     tags.innerHTML = flags.map(([l, on]) =>
       `<span class="recon-tag ${on ? 'on' : ''}">${l}: ${on ? 'yes' : 'no'}</span>`
     ).join('');
-  }
-
-  function renderModule(mod, index) {
-    const key = mod.id + '@' + index;
-    if (renderedKeys.has(key)) {
-      const existing = document.getElementById('mod-' + index);
-      if (existing) {
-        existing.querySelector('.module-count').textContent =
-          mod.count + (mod.id.startsWith('ai_') ? ' call' : ' finding') + (mod.count !== 1 ? 's' : '');
-      }
-      return;
-    }
-    renderedKeys.add(key);
-    const row = document.createElement('div');
-    row.className = 'module-row';
-    row.id = 'mod-' + index;
-    const label = mod.id.startsWith('ai_') ? 'call' : 'finding';
-    row.innerHTML = `
-      <div class="module-icon">${ICONS[mod.id] || '·'}</div>
-      <div class="module-info">
-        <div class="module-name">${mod.name}</div>
-        <div class="module-detail">${mod.id}</div>
-      </div>
-      <span class="module-count">${mod.count} ${label}${mod.count !== 1 ? 's' : ''}</span>
-    `;
-    document.getElementById('module-list').appendChild(row);
   }
 
   function renderEvents(events) {
@@ -223,8 +176,6 @@
     renderRecon(data.repo_profile);
 
     const done = data.modules_done || [];
-    done.forEach((mod, i) => renderModule(mod, i));
-
     renderEvents(data.events || []);
 
     const working = document.getElementById('working-label');

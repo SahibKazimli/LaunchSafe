@@ -1,5 +1,5 @@
 """
-LaunchSafe / AuditShield — Startup Security Auditor
+LaunchSafe — Startup Security Auditor
 FastAPI backend + single LangGraph ReAct agent powered by Claude.
 Run: uvicorn main:app --reload
 """

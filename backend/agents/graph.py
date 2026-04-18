@@ -1,9 +1,14 @@
 """LaunchSafe agent graph.
 
-A single ReAct agent powered by Claude. It has 8 tools, 6 deterministic
-scanners plus `list_repo_files` and `read_file` for repo exploration, and
-produces a structured `AuditReport` as its final output.
+Topology:
 
+    START -> recon   (LLM, structured output: RepoProfile)
+          -> audit   (ReAct agent with scanner tools + read_file)
+          -> END
+
+The audit node is a prebuilt LangGraph ReAct agent. It's embedded as a
+sub-graph inside the outer StateGraph so that we can prepend the recon
+step and share a single `ScanAgentState` across both.
 """
 
 from __future__ import annotations
@@ -13,31 +18,32 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from .recon import recon_node
 from .state import ScanAgentState
 from .tools.agent_tools import ALL_TOOLS
 
-SYSTEM_PROMPT = """\
+AUDIT_SYSTEM_PROMPT = """\
 You are LaunchSafe, a senior application-security engineer auditing a
-startup codebase. Your job is to produce an actionable, prioritised
-security report.
+startup codebase. A recon pass has already produced a RepoProfile which
+you will receive as the first user message. Use it.
 
 Workflow:
-1. Call `list_repo_files` first to understand what kind of project this is.
-2. Run the relevant scanners. Always run secrets, auth, api, and deps. Run
-   cloud only if .tf / .yaml / .yml / .json IaC files exist. Run privacy
-   on any app with user data.
-3. For findings that look like false positives (EXAMPLE keys, test
-   fixtures, docs), you may call `read_file` on the surrounding file to
-   confirm. Keep these calls minimal.
-4. Once you have enough evidence, STOP calling tools and return your
-   final structured AuditReport.
+1. Read the RepoProfile in the first message. Skip scanners that are
+   irrelevant (e.g. skip scan_cloud_tool if has_iac is false).
+2. Always run scan_secrets_tool and scan_auth_tool on any app.
+3. Run scan_api_tool if there are route handlers, scan_cloud_tool if
+   has_iac, scan_privacy_tool if has_user_data, scan_dependencies_tool
+   whenever a manifest is present.
+4. For findings in risk_hotspots files, call read_file to confirm true
+   positives before including them in the final report.
+5. Once you have enough evidence, STOP calling tools and return a
+   structured AuditReport.
 
 Rules:
-- Be concise. Do not repeat tool output verbatim in your messages.
+- Be concise. Do not repeat tool output verbatim.
 - Prioritise by real-world blast radius, not raw severity. One live AWS
   key > ten hardcoded test secrets.
-- The final AuditReport must be valid per the schema. Findings should be
-  deduplicated and trimmed to the most important ~25.
+- Deduplicate findings. Keep the report under ~25 items, most urgent first.
 """
 
 
@@ -58,7 +64,7 @@ class AuditReport(BaseModel):
     summary: str = Field(description="2-4 sentence executive summary")
     findings: list[Finding]
     top_fixes: list[str] = Field(
-        description="3-5 imperative sentences: the first things the team should do Monday morning",
+        description="3-5 imperative sentences: what to do Monday morning",
     )
     overall_risk: str = Field(description="one of: critical, high, medium, low, minimal")
 
@@ -67,7 +73,7 @@ _compiled = None
 
 
 def get_agent():
-    """Build and cache the compiled LangGraph ReAct agent.
+    """Build and cache the compiled outer graph (recon -> audit).
 
     Raises RuntimeError if ANTHROPIC_API_KEY is missing at call time.
     """
@@ -81,16 +87,26 @@ def get_agent():
         )
 
     from langchain_anthropic import ChatAnthropic
+    from langgraph.graph import END, START, StateGraph
     from langgraph.prebuilt import create_react_agent
 
     model_name = os.environ.get("LAUNCHSAFE_LLM_MODEL", "claude-sonnet-4-5")
-    llm = ChatAnthropic(model=model_name, max_tokens=4096, temperature=0)
+    audit_llm = ChatAnthropic(model=model_name, max_tokens=4096, temperature=0)
 
-    _compiled = create_react_agent(
-        model=llm,
+    audit_agent = create_react_agent(
+        model=audit_llm,
         tools=ALL_TOOLS,
         state_schema=ScanAgentState,
-        prompt=SYSTEM_PROMPT,
+        prompt=AUDIT_SYSTEM_PROMPT,
         response_format=AuditReport,
     )
+
+    outer = StateGraph(ScanAgentState)
+    outer.add_node("recon", recon_node)
+    outer.add_node("audit", audit_agent)
+    outer.add_edge(START, "recon")
+    outer.add_edge("recon", "audit")
+    outer.add_edge("audit", END)
+
+    _compiled = outer.compile()
     return _compiled

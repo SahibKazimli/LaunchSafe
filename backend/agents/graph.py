@@ -2,71 +2,77 @@
 
 Topology:
 
-    START -> recon   (LLM, structured output: RepoProfile)
-          -> audit   (ReAct agent with scanner tools + read_file)
-          -> END
+    START
+      -> recon   (mini ReAct: list_repo_files + read_file -> RepoProfile)
+      -> audit   (ReAct: regex triage + AI deep-scans -> AuditReport)
+      -> END
 
-The audit node is a prebuilt LangGraph ReAct agent. It's embedded as a
-sub-graph inside the outer StateGraph so that we can prepend the recon
-step and share a single `ScanAgentState` across both.
+The audit agent has three tiers of tools:
+
+  1. Fast triage (regex, no LLM):       scan_*_tool from agent_tools.py
+  2. AI detection (real analysis):      ai_scan_file, ai_scan_cicd, ai_audit_auth_flow
+  3. Exploration:                       list_repo_files, read_file
+
+The system prompt steers the LLM to run the fast triage as a free pre-pass
+and then spend LLM calls on the hotspots identified during recon.
 """
 
 from __future__ import annotations
 
 import os
-from typing import Optional
-
-from pydantic import BaseModel, Field
 
 from .recon import recon_node
+from .schemas import AuditReport
 from .state import ScanAgentState
-from .tools.agent_tools import ALL_TOOLS
+from .tools.agent_tools import ALL_TOOLS as REGEX_TOOLS
+from .tools.ai_tools import AI_TOOLS
 
 AUDIT_SYSTEM_PROMPT = """\
 You are LaunchSafe, a senior application-security engineer auditing a
 startup codebase. A recon pass has already produced a RepoProfile which
-you will receive as the first user message. Use it.
+you will find in the first user message. USE IT — especially
+`hotspot_files` and the capability flags (`has_iac`, `has_cicd`,
+`has_auth`, `has_payments`, `has_user_data`).
+
+You have three tiers of tools:
+
+  (1) FAST TRIAGE — regex-based, no LLM cost. Call these first as a free
+      pre-pass:
+        scan_secrets_tool, scan_auth_tool, scan_api_tool,
+        scan_cloud_tool, scan_privacy_tool, scan_dependencies_tool.
+
+  (2) AI DETECTION — real reasoning over code. This is where you find the
+      issues regex cannot:
+        ai_scan_file(path, focus): deep-scan one file with a focus area
+          (auth, injection, crypto, ssrf, authz, cicd, general).
+        ai_scan_cicd(): audit all GitHub Actions / Dockerfile / compose
+          files for supply-chain risks. Call once if has_cicd is true.
+        ai_audit_auth_flow(): audit the complete auth surface across
+          multiple files. Call once if has_auth is true.
+
+  (3) EXPLORATION:
+        list_repo_files(), read_file(path).
 
 Workflow:
-1. Read the RepoProfile in the first message. Skip scanners that are
-   irrelevant (e.g. skip scan_cloud_tool if has_iac is false).
-2. Always run scan_secrets_tool and scan_auth_tool on any app.
-3. Run scan_api_tool if there are route handlers, scan_cloud_tool if
-   has_iac, scan_privacy_tool if has_user_data, scan_dependencies_tool
-   whenever a manifest is present.
-4. For findings in risk_hotspots files, call read_file to confirm true
-   positives before including them in the final report.
-5. Once you have enough evidence, STOP calling tools and return a
-   structured AuditReport.
+  1. Run the fast triage scanners relevant to the RepoProfile's flags.
+  2. For every path in `hotspot_files`, call `ai_scan_file` with the most
+     relevant focus. Don't blindly call it with focus='general' — pick
+     specifically (a route handler -> focus='injection' + 'authz';
+     a crypto util -> 'crypto').
+  3. If has_cicd: call `ai_scan_cicd` once.
+  4. If has_auth: call `ai_audit_auth_flow` once.
+  5. Merge and deduplicate findings from triage + AI. Prefer AI findings
+     when they contradict or refine regex hits.
+  6. Return the final AuditReport.
 
 Rules:
-- Be concise. Do not repeat tool output verbatim.
-- Prioritise by real-world blast radius, not raw severity. One live AWS
-  key > ten hardcoded test secrets.
-- Deduplicate findings. Keep the report under ~25 items, most urgent first.
+  - Be concise in your messages; do NOT repeat tool output verbatim.
+  - Prioritise by real-world blast radius, not raw severity. One live
+    production AWS key > ten hardcoded test fixtures.
+  - Drop obvious false positives (EXAMPLE keys, docs, test fixtures) —
+    the AI tools already try to, but you are the final filter.
+  - Cap the final report at ~25 findings, most urgent first.
 """
-
-
-class Finding(BaseModel):
-    severity: str = Field(description="one of: critical, high, medium, low")
-    module: str = Field(description="one of: secrets, auth, api, cloud, privacy, deps")
-    title: str
-    location: str
-    description: str
-    fix: str
-    priority: int = Field(description="1 (most urgent) to 5", ge=1, le=5)
-    is_true_positive: bool = True
-    rationale: Optional[str] = None
-    compliance: list[str] = Field(default_factory=list)
-
-
-class AuditReport(BaseModel):
-    summary: str = Field(description="2-4 sentence executive summary")
-    findings: list[Finding]
-    top_fixes: list[str] = Field(
-        description="3-5 imperative sentences: what to do Monday morning",
-    )
-    overall_risk: str = Field(description="one of: critical, high, medium, low, minimal")
 
 
 _compiled = None
@@ -95,7 +101,7 @@ def get_agent():
 
     audit_agent = create_react_agent(
         model=audit_llm,
-        tools=ALL_TOOLS,
+        tools=REGEX_TOOLS + AI_TOOLS,
         state_schema=ScanAgentState,
         prompt=AUDIT_SYSTEM_PROMPT,
         response_format=AuditReport,

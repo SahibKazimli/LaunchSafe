@@ -1,122 +1,117 @@
-"""Repo-intake recon: the LLM's first pass over an ingested codebase.
+"""Agentic repo-intake recon.
 
-Runs before the ReAct audit loop. Feeds Claude a compact manifest (all file
-paths + full contents of a handful of key config/manifest files) and gets
-back a structured `RepoProfile` describing the stack, surface area, and
-where to look hardest. The profile is injected into the agent's messages
-so the downstream ReAct loop starts already knowing what the app is.
+Instead of dumping a hardcoded manifest, recon runs its own mini ReAct loop
+with `list_repo_files` and `read_file`. The LLM decides which files to
+open (typically 5-15) based on what it sees, then returns a structured
+`RepoProfile` — including a `hotspot_files` list that the downstream audit
+agent uses to target its AI deep-scans.
+
+Recon is scoped: its internal tool-calls stay inside this node. Only the
+`repo_profile` plus one context message get forwarded to the outer graph.
 """
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 
-from pydantic import BaseModel, Field
+from langchain_core.messages import HumanMessage
 
-KEY_FILENAMES = {
-    "README.md", "README", "readme.md",
-    "package.json", "requirements.txt", "pyproject.toml", "Pipfile",
-    "Gemfile", "go.mod", "Cargo.toml", "pom.xml", "build.gradle",
-    "Dockerfile", "docker-compose.yml", "docker-compose.yaml",
-    ".env.example", ".env.sample",
-    "next.config.js", "vite.config.ts", "vite.config.js",
-    "tsconfig.json",
-}
-
-KEY_DIR_HINTS = ("terraform/", "infra/", ".github/workflows/", "k8s/", "helm/")
-
-MAX_MANIFEST_PATHS = 400
-MAX_SNIPPET_BYTES = 4000
-
+from .schemas import RepoProfile
+from .state import ScanAgentState
+from .tools.agent_tools import list_repo_files, read_file
 
 RECON_PROMPT = """\
 You are a senior security auditor doing an initial reconnaissance pass on
-a codebase before running any scanners. You will receive:
-  - the full list of file paths in the repo
-  - the full contents of a handful of key manifest/config files
+a codebase. You must produce a structured RepoProfile.
 
-Your job is to return a structured RepoProfile describing what this
-application is, where the sensitive surface area lives, and which files
-the scanner step should focus on. Be concrete and cite real paths.
+You have two tools:
+  - list_repo_files(): returns every file path and its byte size
+  - read_file(path): returns the full contents of one file (<=20KB)
 
-Do NOT call any tools. Do NOT try to find specific vulnerabilities yet —
-that is the next step. Focus on understanding the system.
+Workflow:
+1. Call list_repo_files FIRST to see the full tree.
+2. Based on what you see, read 5-15 files of your own choosing. Prioritise:
+   - READMEs (to understand what the app does)
+   - Dependency manifests (package.json, requirements.txt, pyproject.toml)
+   - Main entry points (main.py, app.py, server.ts, index.ts)
+   - Auth modules (anything with auth/session/jwt/oauth in the path)
+   - Route/controller files
+   - IaC (Terraform, k8s, Pulumi) and CI/CD workflows (.github/workflows/)
+   - Dockerfile / docker-compose
+3. STOP reading when you have enough context — don't read every file.
+4. Return the RepoProfile. Set `hotspot_files` to the paths most worth
+   deep-scanning in the next phase, ordered by scrutiny priority.
+
+Do NOT attempt to find specific vulnerabilities yet. Recon is about
+understanding the system and identifying where to look hardest.
 """
 
 
-class RepoProfile(BaseModel):
-    stack: str = Field(description="one-sentence stack summary, e.g. 'FastAPI backend + React frontend + Postgres, deployed to AWS via Terraform'")
-    languages: list[str] = Field(default_factory=list, description="primary languages present")
-    frameworks: list[str] = Field(default_factory=list, description="detected frameworks / libraries of note")
-    has_iac: bool = Field(description="true if Terraform / CloudFormation / k8s manifests / Pulumi present")
-    has_auth: bool = Field(description="true if auth / session / JWT / OAuth code is present")
-    has_payments: bool = Field(description="true if payment processing (Stripe, etc.) is integrated")
-    has_user_data: bool = Field(description="true if the app appears to store user PII")
-    entry_points: list[str] = Field(
-        default_factory=list,
-        description="file paths that are likely HTTP entry points or main() equivalents",
+_recon_agent = None
+
+
+def _build_recon_agent():
+    from langchain_anthropic import ChatAnthropic
+    from langgraph.prebuilt import create_react_agent
+
+    model_name = os.environ.get("LAUNCHSAFE_LLM_MODEL", "claude-sonnet-4-5")
+    llm = ChatAnthropic(model=model_name, max_tokens=2048, temperature=0)
+
+    return create_react_agent(
+        model=llm,
+        tools=[list_repo_files, read_file],
+        state_schema=ScanAgentState,
+        prompt=RECON_PROMPT,
+        response_format=RepoProfile,
     )
-    risk_hotspots: list[str] = Field(
-        default_factory=list,
-        description="file paths most worth deep-diving during the scanner step (auth, routes, IaC, config, secrets-adjacent files)",
-    )
-    summary: str = Field(description="2-3 sentence plain-English description of the app and its headline risk surface")
-
-
-def _build_manifest(files: dict[str, str]) -> str:
-    paths = sorted(files.keys())
-
-    snippets: dict[str, str] = {}
-    for p in paths:
-        base = p.rsplit("/", 1)[-1]
-        is_key_file = base in KEY_FILENAMES
-        is_key_dir = any(p.startswith(prefix) or ("/" + prefix) in p for prefix in KEY_DIR_HINTS)
-        if is_key_file or (is_key_dir and p.endswith((".tf", ".yaml", ".yml"))):
-            content = files[p]
-            if len(content) > MAX_SNIPPET_BYTES:
-                content = content[:MAX_SNIPPET_BYTES] + "\n...[truncated]"
-            snippets[p] = content
-
-    manifest = {
-        "file_count": len(files),
-        "file_paths": paths[:MAX_MANIFEST_PATHS],
-        "paths_truncated": len(paths) > MAX_MANIFEST_PATHS,
-        "key_file_contents": snippets,
-    }
-    return json.dumps(manifest, default=str)
 
 
 def recon_node(state: dict[str, Any]) -> dict[str, Any]:
-    """Build a RepoProfile from the ingested files and seed the agent context."""
-    from langchain_anthropic import ChatAnthropic
-    from langchain_core.messages import HumanMessage
-
+    """Run the recon sub-agent and surface its RepoProfile to the outer graph."""
     files = state.get("files", {})
     if not files:
         empty = RepoProfile(
             stack="unknown (no files ingested)",
-            has_iac=False, has_auth=False, has_payments=False, has_user_data=False,
+            has_iac=False, has_cicd=False, has_auth=False,
+            has_payments=False, has_user_data=False,
             summary="No files were ingested.",
         )
         return {"repo_profile": empty.model_dump(), "messages": []}
 
-    model_name = os.environ.get("LAUNCHSAFE_LLM_MODEL", "claude-sonnet-4-5")
-    llm = ChatAnthropic(model=model_name, max_tokens=2048, temperature=0)
-    structured = llm.with_structured_output(RepoProfile)
+    global _recon_agent
+    if _recon_agent is None:
+        _recon_agent = _build_recon_agent()
 
-    manifest = _build_manifest(files)
-    profile: RepoProfile = structured.invoke([
-        {"role": "system", "content": RECON_PROMPT},
-        HumanMessage(content=manifest),
-    ])
+    result = _recon_agent.invoke({
+        "messages": [{
+            "role": "user",
+            "content": (
+                f"Profile this repo. It has {len(files)} files. "
+                "Start by calling list_repo_files, then read strategically."
+            ),
+        }],
+        "files": files,
+    })
+
+    profile = result.get("structured_response")
+    if profile is None:
+        fallback = RepoProfile(
+            stack="unknown (recon agent did not return a structured profile)",
+            has_iac=False, has_cicd=False, has_auth=False,
+            has_payments=False, has_user_data=False,
+            summary="Recon did not complete; proceeding with blind audit.",
+        )
+        return {"repo_profile": fallback.model_dump(), "messages": []}
 
     context_msg = HumanMessage(content=(
         "Recon is complete. Here is the RepoProfile:\n\n"
         f"{profile.model_dump_json(indent=2)}\n\n"
-        "Use this to prioritise which scanners to run and which files to "
-        "read_file on. Now produce the final AuditReport."
+        "Use `hotspot_files` as your deep-scan targets. Use AI tools "
+        "(ai_scan_file, ai_scan_cicd, ai_audit_auth_flow) for real "
+        "vulnerability hunting. You may also call the fast regex-triage "
+        "tools (scan_secrets_tool etc.) as a cheap first pass. Now produce "
+        "the final AuditReport."
     ))
 
     return {

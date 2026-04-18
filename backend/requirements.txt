@@ -1,3 +1,4 @@
+# Web framework
 fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
 python-multipart>=0.0.9
@@ -7,15 +8,6 @@ jinja2>=3.1.3
 langgraph>=0.2.60
 langchain-core>=0.3.20
 langchain-anthropic>=0.3.0
-gitpython>=3.1.40
 
-# Phase 2 — uncomment when ready for deeper scanning
-# truffleHog3
-# detect-secrets
-# semgrep
-# python-hcl2
-# PyGitHub
-# pip-audit
-# openapi-spec-validator
-# celery[redis]
-# redis
+# Repo ingestion (clone GitHub URLs)
+gitpython>=3.1.40

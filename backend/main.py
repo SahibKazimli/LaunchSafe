@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from agents.tools.agent_tools import SCANNER_TOOL_TO_MODULE
+from agents.tools.ai_tools import AI_TOOL_TO_MODULE
 from agents.tools.ingest import clone_github, extract_zip
 from agents.tools.scanners import (
     compute_score,
@@ -27,6 +28,8 @@ from agents.tools.scanners import (
     scan_privacy,
     scan_secrets,
 )
+
+TOOL_TO_MODULE = {**SCANNER_TOOL_TO_MODULE, **AI_TOOL_TO_MODULE}
 
 app = FastAPI(title="LaunchSafe")
 templates = Jinja2Templates(directory="templates")
@@ -75,8 +78,9 @@ async def run_scan(scan_id: str, files: dict[str, str]) -> None:
         }
 
         final_state = None
-        seen_tools: set[str] = set()
         recon_done = False
+        processed_msg_ids: set[str] = set()
+        tool_row_index: dict[str, int] = {}
 
         async for state in agent.astream(initial, stream_mode="values"):
             final_state = state
@@ -89,13 +93,25 @@ async def run_scan(scan_id: str, files: dict[str, str]) -> None:
                 )
 
             for msg in state.get("messages", []) or []:
+                if getattr(msg, "type", None) != "tool":
+                    continue
+                msg_id = getattr(msg, "id", None)
+                if msg_id and msg_id in processed_msg_ids:
+                    continue
+                if msg_id:
+                    processed_msg_ids.add(msg_id)
+
                 name = getattr(msg, "name", None)
-                if getattr(msg, "type", None) == "tool" and name in SCANNER_TOOL_TO_MODULE and name not in seen_tools:
-                    seen_tools.add(name)
-                    mod_id, mod_name = SCANNER_TOOL_TO_MODULE[name]
-                    scan_store[scan_id]["modules_done"].append(
-                        {"id": mod_id, "name": mod_name, "count": 0}
-                    )
+                if name not in TOOL_TO_MODULE:
+                    continue
+
+                mod_id, mod_name = TOOL_TO_MODULE[name]
+                rows = scan_store[scan_id]["modules_done"]
+                if name in tool_row_index:
+                    rows[tool_row_index[name]]["count"] += 1
+                else:
+                    tool_row_index[name] = len(rows)
+                    rows.append({"id": mod_id, "name": mod_name, "count": 1})
 
         report = (final_state or {}).get("structured_response")
 
@@ -107,12 +123,6 @@ async def run_scan(scan_id: str, files: dict[str, str]) -> None:
             return
 
         findings = [f.model_dump() for f in report.findings]
-
-        counts: dict[str, int] = {}
-        for f in findings:
-            counts[f["module"]] = counts.get(f["module"], 0) + 1
-        for row in scan_store[scan_id]["modules_done"]:
-            row["count"] = counts.get(row["id"], 0)
 
         score, grade = compute_score(findings)
         scan_store[scan_id].update({

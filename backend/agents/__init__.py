@@ -1,5 +1,6 @@
-"""LaunchSafe agent layer: a single LangGraph ReAct agent powered by Claude."""
+"""LaunchSafe agent layer: a single LangGraph ReAct agent powered by Claude.
 
-from .graph import AuditReport, Finding, get_agent
-
-__all__ = ["get_agent", "AuditReport", "Finding"]
+Import lazily (`from agents.graph import get_agent`) so that code paths which
+only need the regex tools (`agents.tools.scanners`) don't force langgraph /
+langchain-anthropic / pydantic to be installed.
+"""

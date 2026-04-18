@@ -14,3 +14,4 @@ class ScanAgentState(AgentState):
     scan_id: str
     target: str
     files: dict[str, str]
+    repo_profile: dict

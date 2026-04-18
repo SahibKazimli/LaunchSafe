@@ -55,12 +55,47 @@ CLOUD_PATTERNS = [
 ]
 
 EXTENSIONS_TO_SCAN = {
-    ".py", ".js", ".ts", ".jsx", ".tsx", ".env", ".yaml", ".yml",
-    ".json", ".tf", ".sh", ".rb", ".go", ".php", ".java", ".cs",
-    ".toml", ".ini", ".cfg", ".conf", ".xml", ".html",
+    # Web + scripting
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs", ".vue", ".svelte",
+    ".rb", ".php", ".pl", ".lua", ".sh", ".bash", ".zsh", ".fish",
+    # Compiled languages
+    ".go", ".rs", ".java", ".kt", ".scala", ".cs", ".fs",
+    ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".m", ".mm",
+    ".swift", ".dart", ".ex", ".exs", ".erl", ".hrl", ".clj", ".cljs",
+    # Config + IaC + data
+    ".env", ".yaml", ".yml", ".json", ".json5", ".jsonc",
+    ".tf", ".tfvars", ".hcl", ".bicep",
+    ".toml", ".ini", ".cfg", ".conf", ".xml", ".properties",
+    # Docs + web
+    ".html", ".htm", ".md", ".mdx", ".rst", ".txt",
+    # Misc
+    ".sql", ".graphql", ".proto", ".dockerfile",
 }
 
-SKIP_DIRS = {"node_modules", ".git", "__pycache__", ".venv", "venv", "dist", "build"}
+# Extensionless files worth reading (by basename, case-insensitive).
+FILENAMES_TO_SCAN = {
+    "makefile", "dockerfile", "containerfile", "jenkinsfile", "vagrantfile",
+    "readme", "license", "notice", "authors", "contributors",
+    "procfile", "caddyfile", ".env", ".gitignore", ".gitattributes",
+    ".dockerignore", ".editorconfig", ".npmrc", ".yarnrc", ".nvmrc",
+    "gemfile", "rakefile", "pipfile", "poetry.lock", "yarn.lock",
+    "package-lock.json", "go.mod", "go.sum", "cargo.toml", "cargo.lock",
+}
+
+SKIP_DIRS = {"node_modules", ".git", "__pycache__", ".venv", "venv",
+             "dist", "build", "target", ".next", ".nuxt", ".svelte-kit",
+             "vendor", "Pods", ".gradle", ".idea", ".vscode"}
+
+
+def is_scannable(path_or_name: str) -> bool:
+    """Return True if this file should be ingested for scanning."""
+    from pathlib import Path as _P
+    p = _P(path_or_name)
+    if p.suffix.lower() in EXTENSIONS_TO_SCAN:
+        return True
+    if p.name.lower() in FILENAMES_TO_SCAN:
+        return True
+    return False
 
 
 def scan_secrets(files: dict[str, str]) -> list[dict]:

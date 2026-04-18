@@ -7,6 +7,8 @@ the LLM never has to pass the codebase through a tool argument.
 
 from __future__ import annotations
 
+from typing import Any
+
 from langgraph.prebuilt.chat_agent_executor import AgentState
 
 
@@ -15,3 +17,4 @@ class ScanAgentState(AgentState):
     target: str
     files: dict[str, str]
     repo_profile: dict
+    structured_response: Any

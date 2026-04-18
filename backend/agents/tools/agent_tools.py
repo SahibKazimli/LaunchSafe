@@ -42,47 +42,52 @@ def _format(findings: list[dict[str, Any]]) -> str:
 
 @tool
 def scan_secrets_tool(state: Annotated[dict, InjectedState]) -> str:
-    """Scan the codebase for leaked secrets (API keys, tokens, private keys,
-    hardcoded passwords, DSNs with credentials). Returns a JSON list of
-    findings with severity, location, and a redacted description.
-    Call this first on any audit."""
+    """FAST TRIAGE (regex-based, no LLM). Grep for known secret patterns
+    (AWS keys, Stripe keys, GitHub PATs, private keys, hardcoded DSNs).
+    Cheap; run this as a free pre-pass. Follow up with `ai_scan_file` on
+    any file where you want deeper analysis."""
     return _format(scan_secrets(state.get("files", {})))
 
 
 @tool
 def scan_auth_tool(state: Annotated[dict, InjectedState]) -> str:
-    """Scan for authentication and access-control issues: JWT with alg=none,
-    weak hashing (MD5/SHA1), disabled TLS verification, debug mode on, and
-    short SECRET_KEY values."""
+    """FAST TRIAGE (regex-based, no LLM). Grep for obvious auth red flags:
+    JWT alg=none, MD5/SHA1, verify=False, DEBUG=True, short SECRET_KEY.
+    For real auth-flow analysis use `ai_audit_auth_flow` instead."""
     return _format(scan_auth(state.get("files", {})))
 
 
 @tool
 def scan_api_tool(state: Annotated[dict, InjectedState]) -> str:
-    """Scan for API security issues: string-concatenated SQL queries (SQLi),
-    wildcard CORS, and missing rate limiting on route handlers."""
+    """FAST TRIAGE (regex-based, no LLM). Grep for obvious API issues:
+    string-concatenated SQL, wildcard CORS, missing rate-limit imports.
+    For injection / IDOR / SSRF reasoning use `ai_scan_file` with the
+    relevant focus."""
     return _format(scan_api(state.get("files", {})))
 
 
 @tool
 def scan_cloud_tool(state: Annotated[dict, InjectedState]) -> str:
-    """Scan infrastructure-as-code (Terraform/YAML/JSON) for cloud
-    misconfiguration: public S3 ACLs, publicly-accessible RDS, IAM wildcard
-    actions, 0.0.0.0/0 ingress, privileged containers."""
+    """FAST TRIAGE (regex-based, no LLM). Grep IaC files for obvious
+    misconfig literals: public-read S3 ACL, publicly_accessible = true,
+    0.0.0.0/0, privileged: true. For deeper IaC logic review use
+    `ai_scan_file` on the terraform/*.tf files."""
     return _format(scan_cloud(state.get("files", {})))
 
 
 @tool
 def scan_privacy_tool(state: Annotated[dict, InjectedState]) -> str:
-    """Scan for GDPR/CCPA privacy issues: PII field names (ssn, credit_card,
-    dob), PII written to logs, and missing privacy policy file."""
+    """FAST TRIAGE (regex-based, no LLM). Flag PII-adjacent field names
+    (ssn, credit_card, dob) and PII printed to logs. Use `ai_scan_file`
+    with focus='general' for real data-handling analysis."""
     return _format(scan_privacy(state.get("files", {})))
 
 
 @tool
 def scan_dependencies_tool(state: Annotated[dict, InjectedState]) -> str:
-    """Scan dependency manifests (package.json, requirements.txt, Pipfile,
-    pyproject.toml) for packages with known CVEs."""
+    """FAST TRIAGE (regex-based, no LLM). Match dependency manifests against
+    a small hand-curated CVE list. Useful as a free baseline but the CVE
+    list is not exhaustive."""
     return _format(scan_dependencies(state.get("files", {})))
 
 

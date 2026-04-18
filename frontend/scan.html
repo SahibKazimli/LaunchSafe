@@ -5,37 +5,86 @@
 <style>
   #screen-scan {
     min-height: calc(100vh - 65px);
-    display: flex; align-items: center; justify-content: center; padding: 60px 40px;
+    display: flex; align-items: flex-start; justify-content: center; padding: 60px 40px;
   }
-  .scan-container { width: 100%; max-width: 580px; }
-  .scan-header { margin-bottom: 40px; }
+  .scan-container { width: 100%; max-width: 640px; }
+  .scan-header { margin-bottom: 28px; }
   .scan-header h2 { font-family: var(--serif); font-size: 32px; color: #fff; margin-bottom: 6px; }
   .scan-header p { color: var(--muted); font-size: 13px; font-family: var(--mono); }
+  .scan-header .elapsed { color: var(--accent); }
 
-  .scan-modules { display: flex; flex-direction: column; gap: 10px; margin-bottom: 32px; }
+  .recon-card {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 18px; margin-bottom: 20px;
+  }
+  .recon-card h4 { font-size: 11px; font-family: var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px; }
+  .recon-card .stack { font-size: 14px; color: var(--text); margin-bottom: 8px; }
+  .recon-card .sum { font-size: 12px; color: var(--muted); line-height: 1.55; margin-bottom: 10px; }
+  .recon-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+  .recon-tag { font-family: var(--mono); font-size: 10px; padding: 3px 8px; border: 1px solid var(--border2); border-radius: 4px; color: var(--muted); }
+  .recon-tag.on { color: var(--accent); border-color: rgba(200,241,53,0.4); background: rgba(200,241,53,0.06); }
+
+  .scan-modules { display: flex; flex-direction: column; gap: 8px; margin-bottom: 24px; }
   .module-row {
     display: flex; align-items: center; gap: 14px;
-    padding: 14px 18px; border-radius: 10px; border: 1px solid var(--border);
-    background: var(--bg2); transition: border-color .3s, background .3s;
+    padding: 12px 16px; border-radius: 10px; border: 1px solid rgba(6,214,160,0.3);
+    background: rgba(6,214,160,0.04);
+    animation: fadeUp .25s ease both;
   }
-  .module-row.running { border-color: var(--accent); background: rgba(200,241,53,0.05); }
-  .module-row.done { border-color: rgba(6,214,160,0.3); background: rgba(6,214,160,0.04); }
-  .module-icon { width: 32px; height: 32px; border-radius: 8px; background: var(--bg3); display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+  .module-icon { width: 28px; height: 28px; border-radius: 6px; background: var(--bg3); display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
   .module-info { flex: 1; }
   .module-name { font-size: 13px; font-weight: 500; color: var(--text); }
   .module-detail { font-size: 11px; color: var(--muted); font-family: var(--mono); margin-top: 2px; }
-  .module-status { font-family: var(--mono); font-size: 11px; }
-  .status-waiting { color: var(--muted); }
-  .status-running { color: var(--accent); display: flex; align-items: center; gap: 6px; }
-  .status-done { color: var(--green); }
+  .module-count { font-family: var(--mono); font-size: 11px; color: var(--green); }
 
-  .spinner { width: 12px; height: 12px; border: 1.5px solid rgba(200,241,53,0.2); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
+  .working-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 16px; border-radius: 10px; border: 1px solid var(--accent);
+    background: rgba(200,241,53,0.05);
+  }
+  .spinner { width: 12px; height: 12px; border: 1.5px solid rgba(200,241,53,0.2); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; flex-shrink: 0; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .working-label { font-family: var(--mono); font-size: 12px; color: var(--accent); }
 
-  .overall-progress { margin-top: 8px; }
-  .progress-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); font-family: var(--mono); margin-bottom: 8px; }
-  .progress-bar-bg { height: 3px; background: var(--bg3); border-radius: 2px; overflow: hidden; }
-  .progress-bar-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width .5s ease; width: 0%; }
+  .error-banner {
+    background: rgba(255,77,77,0.08); border: 1px solid rgba(255,77,77,0.3);
+    border-radius: 10px; padding: 14px 16px; color: var(--red);
+    font-family: var(--mono); font-size: 12px; line-height: 1.5;
+    margin-bottom: 20px;
+  }
+
+  .events-panel {
+    margin-top: 20px; background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 12px; overflow: hidden;
+  }
+  .events-head {
+    padding: 10px 16px; font-family: var(--mono); font-size: 10px;
+    color: var(--muted); text-transform: uppercase; letter-spacing: .08em;
+    border-bottom: 1px solid var(--border);
+  }
+  .events-list {
+    max-height: 320px; overflow-y: auto; padding: 8px 0;
+    font-family: var(--mono); font-size: 11px; line-height: 1.55;
+  }
+  .event {
+    padding: 4px 16px; display: flex; gap: 10px; align-items: flex-start;
+    border-left: 2px solid transparent;
+  }
+  .event .t { color: var(--muted); min-width: 42px; flex-shrink: 0; }
+  .event .kind { min-width: 56px; flex-shrink: 0; font-weight: 500; text-transform: uppercase; font-size: 9px; letter-spacing: .06em; padding-top: 1px; }
+  .event .msg { color: var(--text); word-break: break-word; white-space: pre-wrap; }
+  .event.think { border-left-color: rgba(76,201,240,0.4); }
+  .event.think .kind { color: var(--blue); }
+  .event.think .msg { color: #bcd; font-style: italic; }
+  .event.call { border-left-color: rgba(200,241,53,0.5); }
+  .event.call .kind { color: var(--accent); }
+  .event.call .msg { color: var(--accent); }
+  .event.result { border-left-color: rgba(6,214,160,0.3); }
+  .event.result .kind { color: var(--green); }
+  .event.recon .kind { color: var(--yellow); }
+  .event.info .kind { color: var(--muted); }
+  .event.warn { border-left-color: var(--orange); }
+  .event.warn .kind { color: var(--orange); }
 </style>
 {% endblock %}
 
@@ -44,39 +93,28 @@
   <div class="scan-container fadein">
     <div class="scan-header">
       <h2>Scanning your codebase</h2>
-      <p id="status-label">Initialising modules…</p>
+      <p id="status-label">Booting agent… <span class="elapsed" id="elapsed">0s</span></p>
     </div>
 
-    <div class="scan-modules" id="module-list">
-      {% set icons = {'secrets': '🔑', 'auth': '🔐', 'api': '🌐', 'cloud': '☁', 'privacy': '🛡', 'deps': '📦'} %}
-      {% set tools  = {
-        'secrets': 'regex + pattern engine',
-        'auth':    'semgrep rules',
-        'api':     'route + spec parser',
-        'cloud':   'terraform / yaml parser',
-        'privacy': 'heuristic scanner',
-        'deps':    'CVE database lookup'
-      } %}
-      {% for mod_id in ['secrets','auth','api','cloud','privacy','deps'] %}
-      <div class="module-row" id="row-{{ mod_id }}">
-        <div class="module-icon">{{ icons[mod_id] }}</div>
-        <div class="module-info">
-          <div class="module-name">{{ {'secrets':'Secret detection','auth':'Auth & access review','api':'API security review','cloud':'Cloud config audit','privacy':'Privacy & compliance','deps':'Dependency scanning'}[mod_id] }}</div>
-          <div class="module-detail">{{ tools[mod_id] }}</div>
-        </div>
-        <span class="module-status status-waiting" id="status-{{ mod_id }}">waiting</span>
-      </div>
-      {% endfor %}
+    <div id="error-banner" class="error-banner" style="display:none;"></div>
+
+    <div id="recon-card" class="recon-card" style="display:none;">
+      <h4>Repo profile</h4>
+      <div class="stack" id="recon-stack"></div>
+      <div class="sum" id="recon-summary"></div>
+      <div class="recon-tags" id="recon-tags"></div>
     </div>
 
-    <div class="overall-progress">
-      <div class="progress-label">
-        <span id="progress-text">Starting…</span>
-        <span id="progress-pct">0%</span>
-      </div>
-      <div class="progress-bar-bg">
-        <div class="progress-bar-fill" id="progress-fill"></div>
-      </div>
+    <div class="scan-modules" id="module-list"></div>
+
+    <div id="working" class="working-row">
+      <div class="spinner"></div>
+      <div class="working-label" id="working-label">Waiting for first tool call…</div>
+    </div>
+
+    <div class="events-panel">
+      <div class="events-head">Live activity</div>
+      <div id="events-list" class="events-list"></div>
     </div>
   </div>
 </section>
@@ -85,45 +123,130 @@
 {% block scripts %}
 <script>
   const SCAN_ID = "{{ scan_id }}";
-  const TOTAL = 6;
-  const ORDER = ['secrets','auth','api','cloud','privacy','deps'];
+  const ICONS = {
+    recon: '🔍', secrets: '🔑', auth: '🔐', api: '🌐',
+    cloud: '☁', privacy: '🛡', deps: '📦',
+    ai_deep: '🤖', ai_cicd: '⚙', ai_auth: '🔒'
+  };
 
-  let pollInterval = setInterval(poll, 1200);
+  const startedAt = Date.now();
+  let pollInterval = setInterval(poll, 1500);
+  let tickInterval = setInterval(tick, 1000);
+  const renderedKeys = new Set();
+  let lastEventCount = 0;
+
+  function tick() {
+    const s = Math.round((Date.now() - startedAt) / 1000);
+    document.getElementById('elapsed').textContent = s + 's';
+  }
+
+  function renderRecon(profile) {
+    if (!profile) return;
+    const card = document.getElementById('recon-card');
+    if (card.style.display !== 'none') return;
+    card.style.display = 'block';
+    document.getElementById('recon-stack').textContent = profile.stack || '';
+    document.getElementById('recon-summary').textContent = profile.summary || '';
+    const tags = document.getElementById('recon-tags');
+    const flags = [
+      ['IaC', profile.has_iac], ['CI/CD', profile.has_cicd],
+      ['Auth', profile.has_auth], ['Payments', profile.has_payments],
+      ['User PII', profile.has_user_data],
+    ];
+    tags.innerHTML = flags.map(([l, on]) =>
+      `<span class="recon-tag ${on ? 'on' : ''}">${l}: ${on ? 'yes' : 'no'}</span>`
+    ).join('');
+  }
+
+  function renderModule(mod, index) {
+    const key = mod.id + '@' + index;
+    if (renderedKeys.has(key)) {
+      const existing = document.getElementById('mod-' + index);
+      if (existing) {
+        existing.querySelector('.module-count').textContent =
+          mod.count + (mod.id.startsWith('ai_') ? ' call' : ' finding') + (mod.count !== 1 ? 's' : '');
+      }
+      return;
+    }
+    renderedKeys.add(key);
+    const row = document.createElement('div');
+    row.className = 'module-row';
+    row.id = 'mod-' + index;
+    const label = mod.id.startsWith('ai_') ? 'call' : 'finding';
+    row.innerHTML = `
+      <div class="module-icon">${ICONS[mod.id] || '·'}</div>
+      <div class="module-info">
+        <div class="module-name">${mod.name}</div>
+        <div class="module-detail">${mod.id}</div>
+      </div>
+      <span class="module-count">${mod.count} ${label}${mod.count !== 1 ? 's' : ''}</span>
+    `;
+    document.getElementById('module-list').appendChild(row);
+  }
+
+  function renderEvents(events) {
+    if (events.length <= lastEventCount) return;
+    const list = document.getElementById('events-list');
+    const atBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 20;
+    const newOnes = events.slice(lastEventCount);
+    lastEventCount = events.length;
+    for (const ev of newOnes) {
+      const row = document.createElement('div');
+      row.className = 'event ' + ev.kind;
+      row.innerHTML =
+        `<span class="t">${ev.t}s</span>` +
+        `<span class="kind">${ev.kind}</span>` +
+        `<span class="msg"></span>`;
+      row.querySelector('.msg').textContent = ev.text || '';
+      list.appendChild(row);
+    }
+    if (atBottom) list.scrollTop = list.scrollHeight;
+  }
 
   async function poll() {
-    const res = await fetch('/scan-status/' + SCAN_ID);
-    const data = await res.json();
+    let data;
+    try {
+      const res = await fetch('/scan-status/' + SCAN_ID);
+      data = await res.json();
+    } catch (e) { return; }
+
+    if (data.error) {
+      const banner = document.getElementById('error-banner');
+      banner.style.display = 'block';
+      banner.textContent = 'Scan error: ' + data.error;
+      document.getElementById('working').style.display = 'none';
+      clearInterval(pollInterval);
+      clearInterval(tickInterval);
+      return;
+    }
+
+    renderRecon(data.repo_profile);
 
     const done = data.modules_done || [];
-    const doneIds = done.map(m => m.id);
-    const pct = Math.round((done.length / TOTAL) * 100);
+    done.forEach((mod, i) => renderModule(mod, i));
 
-    document.getElementById('progress-fill').style.width = pct + '%';
-    document.getElementById('progress-pct').textContent = pct + '%';
+    renderEvents(data.events || []);
 
-    ORDER.forEach((id, i) => {
-      const row = document.getElementById('row-' + id);
-      const statusEl = document.getElementById('status-' + id);
-      const modDone = done.find(m => m.id === id);
-
-      if (modDone) {
-        row.classList.remove('running'); row.classList.add('done');
-        statusEl.className = 'module-status status-done';
-        statusEl.textContent = modDone.count + ' finding' + (modDone.count !== 1 ? 's' : '');
-      } else if (i === doneIds.length) {
-        row.classList.add('running');
-        statusEl.className = 'module-status status-running';
-        statusEl.innerHTML = '<div class="spinner"></div> running';
-        document.getElementById('status-label').textContent = 'Running module ' + (i+1) + ' of ' + TOTAL + '…';
+    const working = document.getElementById('working-label');
+    if (data.status === 'running') {
+      if (data.repo_profile) {
+        const auditCalls = done.filter(m => m.id !== 'recon').length;
+        working.textContent = auditCalls
+          ? `Auditing… ${auditCalls} tool call${auditCalls !== 1 ? 's' : ''} completed, ${data.findings_count} finding${data.findings_count !== 1 ? 's' : ''} so far`
+          : 'Audit agent thinking…';
+      } else {
+        working.textContent = 'Recon agent exploring the repo…';
       }
-    });
+    }
 
     if (data.status === 'done') {
       clearInterval(pollInterval);
-      document.getElementById('progress-fill').style.width = '100%';
-      document.getElementById('progress-pct').textContent = '100%';
-      document.getElementById('status-label').textContent = 'Complete — building report…';
-      setTimeout(() => { window.location.href = '/report/' + SCAN_ID; }, 800);
+      clearInterval(tickInterval);
+      document.getElementById('working').style.display = 'none';
+      document.getElementById('status-label').innerHTML =
+        'Complete — building report… <span class="elapsed">' +
+        Math.round((Date.now() - startedAt) / 1000) + 's</span>';
+      setTimeout(() => { window.location.href = '/report/' + SCAN_ID; }, 600);
     }
   }
 

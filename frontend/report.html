@@ -2,7 +2,7 @@
 {% block title %}Security Report — LaunchSafe{% endblock %}
 
 {% block nav_extra %}
-<a href="/" class="btn-ghost">New scan</a>
+<a href="/" class="btn-primary">New scan</a>
 {% endblock %}
 
 {% block extra_styles %}
@@ -13,10 +13,10 @@
   .report-sidebar { display: flex; flex-direction: column; gap: 12px; }
 
   .score-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 16px; padding: 24px; text-align: center; }
-  .score-label { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .1em; text-transform: uppercase; margin-bottom: 12px; }
+  .score-label { font-family: var(--sans); font-size: 14px; color: #fff; font-weight: 600; text-transform: none; letter-spacing: normal; margin-bottom: 12px; }
   .score-number { font-family: var(--serif); font-size: 80px; line-height: 1; margin-bottom: 4px; }
-  .grade-A { color: #06d6a0; } .grade-B { color: #4cc9f0; } .grade-C { color: #ffd166; } .grade-D { color: #ff8c42; } .grade-F { color: #ff4d4d; }
-  .score-sub { font-size: 12px; color: var(--muted); }
+  .grade-A { color: #4cc9f0; } .grade-B { color: #ffd166; } .grade-C { color: #ffd166; } .grade-D { color: #ff8c42; } .grade-F { color: #ff4d4d; }
+  .score-sub { font-family: var(--sans); font-size: 12px; color: #fff; }
 
   .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .stat-cell { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 14px; text-align: center; }
@@ -25,18 +25,19 @@
   .num-critical { color: #ff4d4d; } .num-high { color: #ff8c42; } .num-medium { color: #ffd166; } .num-low { color: #4cc9f0; }
 
   .sidebar-section { background: var(--bg2); border: 1px solid var(--border); border-radius: 14px; padding: 18px; }
-  .sidebar-section h4 { font-size: 10px; font-family: var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 12px; }
+  .sidebar-section h4 { font-size: 14px; font-family: var(--sans); color: #fff; font-weight: bold; text-transform: none; letter-spacing: normal; margin-bottom: 12px; }
 
   .compliance-item { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 12px; }
   .compliance-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
   .comp-gap { background: var(--red); } .comp-partial { background: var(--yellow); } .comp-ok { background: var(--green); }
   .compliance-name { color: var(--text); flex: 1; }
-  .compliance-status { color: var(--muted); font-family: var(--mono); font-size: 10px; }
+  .compliance-status { color: var(--muted); font-family: var(--sans); font-size: 10px; }
 
   .report-main { display: flex; flex-direction: column; gap: 16px; }
   .report-top { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 8px; }
   .report-top h2 { font-family: var(--serif); font-size: 28px; color: #fff; }
-  .report-top p { color: var(--muted); font-size: 12px; font-family: var(--mono); margin-top: 4px; }
+  .report-top p { color: var(--muted); font-size: 12px; font-family: var(--sans); margin-top: 4px; }
+  .findings-count { color: var(--accent); }
 
   .findings-section { background: var(--bg2); border: 1px solid var(--border); border-radius: 16px; overflow: hidden; }
   .findings-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
@@ -66,18 +67,36 @@
   .sev-low      { background: rgba(76,201,240,0.15); color: var(--blue); border: 1px solid rgba(76,201,240,0.25); }
 
   .finding-title { font-size: 13px; font-weight: 500; color: var(--text); }
-  .finding-location { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-bottom: 6px; }
-  .finding-desc { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .finding-location { font-family: var(--sans); font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+  .finding-desc { font-family: var(--sans); font-size: 12px; color: var(--muted); line-height: 1.5; }
 
-  .finding-fix { margin-top: 10px; padding: 10px 12px; background: rgba(200,241,53,0.05); border: 1px solid rgba(200,241,53,0.12); border-radius: 8px; font-size: 12px; color: rgba(200,241,53,0.85); display: none; }
+  .finding-fix { margin-top: 10px; padding: 10px 12px; background: rgba(200,241,53,0.05); border: 1px solid rgba(200,241,53,0.12); border-radius: 8px; font-family: var(--sans); font-size: 12px; color: rgba(200,241,53,0.85); display: none; }
   .finding-item.expanded .finding-fix { display: block; }
-  .fix-label { font-family: var(--mono); font-size: 10px; color: var(--accent); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .06em; }
+  .fix-label { font-family: var(--sans); font-size: 10px; color: var(--accent); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .06em; }
 
   .compliance-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-  .comp-tag { font-family: var(--mono); font-size: 10px; padding: 2px 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--border2); border-radius: 4px; color: var(--muted); }
+  .comp-tag { font-family: var(--sans); font-size: 10px; padding: 2px 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--border2); border-radius: 4px; color: var(--muted); }
 
   .empty-state { padding: 48px 20px; text-align: center; color: var(--muted); font-size: 13px; }
   .empty-state strong { display: block; color: var(--green); font-size: 20px; margin-bottom: 8px; }
+
+  .risk-scoring-section { background: var(--bg2); border: 1px solid var(--border); border-radius: 14px; padding: 18px; }
+  .risk-scoring-section h4 { font-size: 14px; font-family: var(--sans); color: #fff; font-weight: 600; text-transform: none; letter-spacing: normal; margin-bottom: 12px; }
+  .risk-intro { font-size: 12px; color: var(--muted); margin-bottom: 16px; line-height: 1.5; }
+  .risk-blocks { display: flex; flex-direction: column; gap: 16px; }
+  .risk-block h5 { font-size: 12px; font-weight: 500; color: var(--text); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+  .risk-block p { font-size: 11px; color: var(--muted); line-height: 1.4; }
+  .badge { background: var(--accent); color: #0b0c0e; font-family: var(--mono); font-size: 9px; padding: 2px 6px; border-radius: 4px; font-weight: 500; }
+  .severity-legend { margin-top: 16px; }
+  .severity-legend h5 { font-size: 12px; font-weight: 500; color: var(--text); margin-bottom: 8px; }
+  .severity-item { display: grid; grid-template-columns: 65px 1fr; gap: 8px; margin-bottom: 4px; font-size: 11px; line-height: 1.2; align-items: center; }
+  .severity-desc { color: var(--muted); }
+  .severity-label { font-family: var(--mono); font-size: 10px; font-weight: 500; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; letter-spacing: .05em; text-align: center; }
+  .severity-label.critical { background: var(--red); color: white; }
+  .severity-label.high { background: var(--orange); color: white; }
+  .severity-label.medium { background: var(--yellow); color: black; }
+  .severity-label.low { background: var(--blue); color: white; }
+  .risk-footer { font-size: 11px; color: var(--muted); margin-top: 12px; font-style: italic; }
 
   @media (max-width: 800px) {
     .report-layout { grid-template-columns: 1fr; }
@@ -93,7 +112,7 @@
     <!-- ── SIDEBAR ── -->
     <aside class="report-sidebar">
       <div class="score-card">
-        <div class="score-label">Risk grade</div>
+        <div class="score-label">RISK GRADE</div>
         <div class="score-number grade-{{ scan.grade }}">{{ scan.grade }}</div>
         <div class="score-sub">Score: {{ scan.score }} / 100</div>
       </div>
@@ -106,7 +125,7 @@
       </div>
 
       <div class="sidebar-section">
-        <h4>Compliance gaps</h4>
+        <h4>COMPLIANCE GAPS</h4>
         {% set has_critical = counts.critical > 0 %}
         {% set has_high = counts.high > 0 %}
         <div class="compliance-item">
@@ -131,6 +150,32 @@
         </div>
       </div>
 
+      <div class="sidebar-section risk-scoring-section">
+        <h4>HOW LAUNCHSAFE SCORES RISK</h4>
+        <p class="risk-intro">LaunchSafe combines industry-standard security scoring with exploitability and business-context analysis, so findings are not just detected, but meaningfully prioritized.</p>
+        <div class="risk-blocks">
+          <div class="risk-block">
+            <h5>CVSS-based severity <span class="badge">CVSS</span></h5>
+            <p>Uses CVSS-style scoring to assess severity based on exploitability and technical impact.</p>
+          </div>
+          <div class="risk-block">
+            <h5>OWASP-style risk assessment <span class="badge">OWASP</span></h5>
+            <p>Uses OWASP-style reasoning to evaluate how likely an issue is and how much it matters in real applications.</p>
+          </div>
+          <div class="risk-block">
+            <h5>Threat and business context <span class="badge">Context</span></h5>
+            <p>Adjusts priority using real-world context like internet exposure, sensitive data, exploit signals, and customer or compliance impact.</p>
+          </div>
+        </div>
+        <div class="severity-legend">
+          <h5>Severity levels</h5>
+          <div class="severity-item"><span class="severity-label critical">Critical</span><span class="severity-desc">easy to exploit and high-impact, likely to cause major compromise</span></div>
+          <div class="severity-item"><span class="severity-label high">High</span><span class="severity-desc">serious weakness with significant security impact</span></div>
+          <div class="severity-item"><span class="severity-label medium">Medium</span><span class="severity-desc">real issue, but requires more conditions or has limited impact</span></div>
+          <div class="severity-item"><span class="severity-label low">Low</span><span class="severity-desc">lower-risk issue, defense-in-depth, or limited practical exposure</span></div>
+        </div>
+      </div>
+
     </aside>
 
     <!-- ── MAIN ── -->
@@ -138,7 +183,7 @@
       <div class="report-top">
         <div>
           <h2>Security report</h2>
-          <p>Target: {{ scan.target }} · {{ total }} findings</p>
+          <p>Target: {{ scan.target }} · <span class="findings-count">{{ total }} findings</span></p>
         </div>
         <a href="/api/findings/{{ scan.get('id', '') }}" class="btn-ghost" target="_blank">JSON export</a>
       </div>
@@ -159,14 +204,14 @@
           {% for f in findings %}
           <div class="finding-item" data-sev="{{ f.severity }}" onclick="this.classList.toggle('expanded')">
             <div class="finding-top">
-              <span class="sev-badge sev-{{ f.severity }}">{{ f.severity }}</span>
+              <span class="sev-badge sev-{{ f.severity }}" title="{% if f.severity == 'critical' %}easy to exploit and high-impact, likely to cause major compromise{% elif f.severity == 'high' %}serious weakness with significant security impact{% elif f.severity == 'medium' %}real issue, but requires more conditions or has limited impact{% elif f.severity == 'low' %}lower-risk issue, defense-in-depth, or limited practical exposure{% endif %}">{{ f.severity }}</span>
               <span class="finding-title">{{ f.title }}</span>
             </div>
             <div class="finding-location">{{ f.location }}</div>
             <div class="finding-desc">{{ f.description }}</div>
             {% if f.compliance %}
             <div class="compliance-tags">
-              {% for tag in f.compliance %}<span class="comp-tag">{{ tag }}</span>{% endfor %}
+              {% for tag in f.compliance %}<span class="comp-tag" title="{% if 'GDPR' in tag %}GDPR - General Data Protection Regulation. More info: https://gdpr-info.eu/{% elif 'SOC2' in tag %}SOC 2 - Service Organization Control 2. More info: https://www.aicpa.org/soc2{% elif 'ISO' in tag %}ISO 27001 - Information Security Management. More info: https://www.iso.org/isoiec-27001-information-security.html{% elif 'OWASP' in tag %}OWASP Top 10 - Open Web Application Security Project. More info: https://owasp.org/www-project-top-ten/{% else %}{{ tag }} - compliance standard{% endif %}">{{ tag }}</span>{% endfor %}
             </div>
             {% endif %}
             <div class="finding-fix">

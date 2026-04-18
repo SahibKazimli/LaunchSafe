@@ -9,14 +9,14 @@
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
-    --bg: #0b0c0e; --bg2: #111317; --bg3: #181a1f;
+    --bg: #1a1a1a; --bg2: #111317; --bg3: #181a1f;
     --border: rgba(255,255,255,0.07); --border2: rgba(255,255,255,0.12);
-    --text: #e8e6e0; --muted: #6b6a65;
+    --text: #e8e6e0; --muted: #b0b0b0;
     --accent: #c8f135; --accent2: #a8d420;
     --red: #ff4d4d; --orange: #ff8c42; --yellow: #ffd166; --green: #06d6a0; --blue: #4cc9f0;
     --mono: 'DM Mono', monospace; --serif: 'Instrument Serif', serif; --sans: 'DM Sans', sans-serif;
   }
-  html { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 15px; line-height: 1.6; }
+  html { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 18px; line-height: 1.6; }
 
   nav {
     display: flex; align-items: center; justify-content: space-between;
@@ -24,7 +24,7 @@
     position: sticky; top: 0; background: rgba(11,12,14,0.92);
     backdrop-filter: blur(12px); z-index: 100;
   }
-  .logo { font-family: var(--mono); font-size: 16px; font-weight: 500; color: var(--accent); letter-spacing: -0.02em; }
+  .logo { font-family: var(--mono); font-size: 20px; font-weight: 500; color: var(--accent); letter-spacing: -0.02em; text-decoration: none; }
   .logo span { color: var(--muted); }
   .nav-right { display: flex; align-items: center; gap: 12px; }
   .nav-badge { font-family: var(--mono); font-size: 11px; color: var(--muted); border: 1px solid var(--border2); padding: 4px 10px; border-radius: 20px; }
@@ -54,7 +54,7 @@
 </head>
 <body>
 <nav>
-  <a href="/" class="logo">launch<span>/</span>safe</a>
+  <a href="/" class="logo">LaunchSafe</a>
   <div class="nav-right">
     <span class="nav-badge">v0.1 · Python + FastAPI</span>
     {% block nav_extra %}{% endblock %}

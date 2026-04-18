@@ -10,6 +10,7 @@ import asyncio
 import os
 import tempfile
 import uuid
+from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse
@@ -32,8 +33,14 @@ from agents.tools.scanners import (
 TOOL_TO_MODULE = {**SCANNER_TOOL_TO_MODULE, **AI_TOOL_TO_MODULE}
 
 app = FastAPI(title="LaunchSafe")
-templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
+
+_HERE = Path(__file__).resolve().parent
+_FRONTEND = (_HERE.parent / "frontend").resolve()
+_STATIC = _HERE / "static"
+
+templates = Jinja2Templates(directory=str(_FRONTEND))
+if _STATIC.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 
 scan_store: dict[str, dict] = {}
 
@@ -182,14 +189,14 @@ async def _run_regex_fallback(scan_id: str, files: dict[str, str]) -> None:
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request, "index.html")
 
 
 @app.get("/scan/{scan_id}", response_class=HTMLResponse)
 async def scan_page(request: Request, scan_id: str):
     if scan_id not in scan_store:
         return HTMLResponse("Scan not found", status_code=404)
-    return templates.TemplateResponse("scan.html", {"request": request, "scan_id": scan_id})
+    return templates.TemplateResponse(request, "scan.html", {"scan_id": scan_id})
 
 
 @app.get("/report/{scan_id}", response_class=HTMLResponse)
@@ -205,8 +212,7 @@ async def report_page(request: Request, scan_id: str):
         "medium":   sum(1 for f in findings if f["severity"] == "medium"),
         "low":      sum(1 for f in findings if f["severity"] == "low"),
     }
-    return templates.TemplateResponse("report.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "report.html", {
         "scan": scan,
         "findings": findings,
         "counts": counts,
@@ -265,10 +271,17 @@ async def scan_status(scan_id: str):
     scan = scan_store.get(scan_id)
     if not scan:
         return {"error": "not found"}
+    profile = scan.get("repo_profile")
+    if hasattr(profile, "model_dump"):
+        profile = profile.model_dump()
     return {
         "status": scan["status"],
+        "target": scan.get("target", ""),
         "modules_done": scan.get("modules_done", []),
         "findings_count": len(scan.get("findings", [])),
+        "repo_profile": profile,
+        "summary": scan.get("summary", ""),
+        "overall_risk": scan.get("overall_risk", ""),
         "error": scan.get("error"),
     }
 

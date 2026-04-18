@@ -19,19 +19,20 @@ from langchain_core.messages import HumanMessage
 
 from .schemas import RepoProfile
 from .state import ScanAgentState
-from .tools.agent_tools import list_repo_files, read_file
+from .tools.agent_tools import list_repo_files, read_file, read_files
 
 RECON_PROMPT = """\
 You are a senior security auditor doing an initial reconnaissance pass on
 a codebase. You must produce a structured RepoProfile.
 
-You have two tools:
+You have three tools:
   - list_repo_files(): returns every file path and its byte size
-  - read_file(path): returns the full contents of one file (<=20KB)
+  - read_files(paths): BATCH-read up to 10 files at once. PREFER THIS.
+  - read_file(path): read one file (only when exploring adaptively)
 
 Workflow:
 1. Call list_repo_files FIRST to see the full tree.
-2. Based on what you see, read 5-15 files of your own choosing. Prioritise:
+2. In ONE call to `read_files`, batch-fetch the key files. Prioritise:
    - READMEs (to understand what the app does)
    - Dependency manifests (package.json, requirements.txt, pyproject.toml)
    - Main entry points (main.py, app.py, server.ts, index.ts)
@@ -39,9 +40,15 @@ Workflow:
    - Route/controller files
    - IaC (Terraform, k8s, Pulumi) and CI/CD workflows (.github/workflows/)
    - Dockerfile / docker-compose
-3. STOP reading when you have enough context — don't read every file.
-4. Return the RepoProfile. Set `hotspot_files` to the paths most worth
+3. If you need a couple more files AFTER seeing the first batch, call
+   `read_files` again (batch) or `read_file` (single, for adaptive picks).
+4. STOP reading when you have enough context — don't read every file.
+5. Return the RepoProfile. Set `hotspot_files` to the paths most worth
    deep-scanning in the next phase, ordered by scrutiny priority.
+
+Each tool call costs ~2-4 seconds of inference round-trip, so batching is
+MUCH faster than a sequence of single reads. Target 2-3 total tool calls
+before returning the profile.
 
 Do NOT attempt to find specific vulnerabilities yet. Recon is about
 understanding the system and identifying where to look hardest.
@@ -60,7 +67,7 @@ def _build_recon_agent():
 
     return create_react_agent(
         model=llm,
-        tools=[list_repo_files, read_file],
+        tools=[list_repo_files, read_files, read_file],
         state_schema=ScanAgentState,
         prompt=RECON_PROMPT,
         response_format=RepoProfile,

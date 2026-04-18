@@ -103,15 +103,59 @@ def list_repo_files(state: Annotated[dict, InjectedState]) -> str:
 
 @tool
 def read_file(path: str, state: Annotated[dict, InjectedState]) -> str:
-    """Read the full contents of one file from the ingested repo. Use this
-    when a scanner finding needs more context (e.g. to confirm a true
-    positive). Max 20KB returned; larger files are truncated."""
+    """Read the full contents of ONE file from the ingested repo. Use this
+    when adaptive exploration — you read a file, then pick the next based
+    on what you see. Max 20KB returned; larger files are truncated.
+    For reading several files at once prefer `read_files` (faster)."""
     content = state.get("files", {}).get(path)
     if content is None:
         return json.dumps({"error": f"file not in repo: {path}"})
     if len(content) > 20_000:
         content = content[:20_000] + "\n...[truncated]"
     return json.dumps({"path": path, "content": content})
+
+
+MAX_FILES_PER_BATCH = 10
+MAX_BATCH_BYTES = 120_000
+
+
+@tool
+def read_files(paths: list[str], state: Annotated[dict, InjectedState]) -> str:
+    """Batch-read up to 10 files in one call. MUCH faster than calling
+    `read_file` in a loop — each `read_file` costs a full LLM round-trip,
+    but `read_files` returns everything in one tool response.
+
+    Use this when you already know which files you want (typically right
+    after `list_repo_files`). Each file is truncated to 12KB and the total
+    response is capped at ~120KB.
+
+    Returns JSON: {"files": [{"path": ..., "content": ..., "truncated": bool}, ...],
+    "skipped": [paths that didn't fit or don't exist]}.
+    """
+    repo = state.get("files", {})
+    result_files: list[dict] = []
+    skipped: list[str] = []
+    total_bytes = 0
+
+    for p in paths[:MAX_FILES_PER_BATCH]:
+        content = repo.get(p)
+        if content is None:
+            skipped.append(p)
+            continue
+        truncated = False
+        if len(content) > 12_000:
+            content = content[:12_000] + "\n...[truncated]"
+            truncated = True
+        if total_bytes + len(content) > MAX_BATCH_BYTES:
+            skipped.append(p)
+            continue
+        total_bytes += len(content)
+        result_files.append({"path": p, "content": content, "truncated": truncated})
+
+    for p in paths[MAX_FILES_PER_BATCH:]:
+        skipped.append(p)
+
+    return json.dumps({"files": result_files, "skipped": skipped})
 
 
 ALL_TOOLS = [
@@ -123,6 +167,7 @@ ALL_TOOLS = [
     scan_dependencies_tool,
     list_repo_files,
     read_file,
+    read_files,
 ]
 
 SCANNER_TOOL_TO_MODULE = {

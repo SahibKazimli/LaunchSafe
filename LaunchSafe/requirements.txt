@@ -1,0 +1,15 @@
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+jinja2>=3.1.3
+
+# Phase 2 — uncomment when ready for real scanning
+# truffleHog3
+# detect-secrets
+# semgrep
+# python-hcl2
+# PyGitHub
+# pip-audit
+# openapi-spec-validator
+# celery[redis]
+# redis

@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}AuditShield — Startup Security Auditor{% endblock %}
+
+{% block extra_styles %}
+<style>
+  #screen-upload {
+    min-height: calc(100vh - 65px);
+    display: flex; align-items: center; justify-content: center;
+    padding: 60px 40px;
+  }
+  .hero { text-align: center; max-width: 640px; width: 100%; }
+  .hero-eyebrow {
+    font-family: var(--mono); font-size: 11px; color: var(--accent);
+    letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 20px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  .hero-eyebrow::before, .hero-eyebrow::after { content: ''; flex: 1; max-width: 40px; height: 1px; background: var(--accent); opacity: 0.4; }
+  h1 { font-family: var(--serif); font-size: clamp(36px, 5vw, 58px); line-height: 1.1; color: #fff; margin-bottom: 16px; }
+  h1 em { font-style: italic; color: var(--accent); }
+  .hero-sub { color: var(--muted); font-size: 15px; max-width: 480px; margin: 0 auto 40px; }
+
+  .upload-zone {
+    border: 1.5px dashed var(--border2); border-radius: 16px;
+    padding: 48px 32px; text-align: center; cursor: pointer;
+    transition: all .2s; background: var(--bg2); position: relative; margin-bottom: 16px;
+  }
+  .upload-zone:hover, .upload-zone.dragover { border-color: var(--accent); background: rgba(200,241,53,0.04); }
+  .upload-icon { font-size: 32px; margin-bottom: 12px; opacity: 0.5; }
+  .upload-zone h3 { font-size: 15px; font-weight: 500; color: var(--text); margin-bottom: 6px; }
+  .upload-zone p { font-size: 13px; color: var(--muted); }
+  #file-input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+
+  .file-selected { font-family: var(--mono); font-size: 12px; color: var(--accent); margin-top: 8px; display: none; }
+
+  .divider { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 12px; margin: 16px 0; }
+  .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+  .github-input-row { display: flex; gap: 8px; }
+  .github-input-row input {
+    flex: 1; background: var(--bg2); border: 1px solid var(--border2);
+    color: var(--text); padding: 12px 16px; border-radius: 10px;
+    font-family: var(--mono); font-size: 13px; outline: none; transition: border-color .2s;
+  }
+  .github-input-row input:focus { border-color: var(--accent); }
+  .github-input-row input::placeholder { color: var(--muted); }
+
+  .scan-btn-full { width: 100%; margin-top: 20px; padding: 14px; font-size: 15px; border-radius: 12px; text-align: center; }
+
+  .trust-row { display: flex; gap: 24px; justify-content: center; margin-top: 32px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+  .trust-row span { display: flex; align-items: center; gap: 6px; }
+  .trust-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+
+  .modules-preview { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 28px 0; }
+  .mod-chip {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 12px; font-size: 12px; color: var(--muted); text-align: left;
+  }
+  .mod-chip strong { display: block; color: var(--text); font-size: 12px; margin-bottom: 2px; font-weight: 500; }
+</style>
+{% endblock %}
+
+{% block content %}
+<section id="screen-upload">
+  <div class="hero fadein">
+    <div class="hero-eyebrow">Security Audit Platform</div>
+    <h1>Find every risk<br>before <em>they do</em></h1>
+    <p class="hero-sub">Upload your codebase or paste a GitHub URL. Get a full security audit in under 2 minutes — secrets, auth gaps, API risks, cloud misconfigs, and compliance readiness.</p>
+
+    <div class="modules-preview">
+      <div class="mod-chip"><strong>🔑 Secret detection</strong>Keys, tokens, creds</div>
+      <div class="mod-chip"><strong>🔐 Auth review</strong>MFA, RBAC, sessions</div>
+      <div class="mod-chip"><strong>🌐 API security</strong>Injection, CORS, rate limits</div>
+      <div class="mod-chip"><strong>☁ Cloud config</strong>IAM, S3, open ports</div>
+      <div class="mod-chip"><strong>🛡 Privacy</strong>GDPR, CCPA, PII</div>
+      <div class="mod-chip"><strong>📦 Dependencies</strong>CVEs, known vulns</div>
+    </div>
+
+    <form id="scan-form" method="POST" action="/start-scan" enctype="multipart/form-data">
+      <div class="upload-zone" id="dropzone">
+        <input type="file" name="file" id="file-input" accept=".zip">
+        <div class="upload-icon">⬆</div>
+        <h3>Drop your codebase here</h3>
+        <p>ZIP archive · .env files · Terraform configs · OpenAPI specs</p>
+      </div>
+      <div class="file-selected" id="file-selected-label"></div>
+
+      <div class="divider">or scan a GitHub URL (uses demo analysis)</div>
+
+      <div class="github-input-row">
+        <input type="text" name="github_url" id="github-url" placeholder="https://github.com/your-org/your-repo" />
+        <button type="submit" class="btn-primary">Scan</button>
+      </div>
+
+      <button type="submit" class="btn-primary scan-btn-full">Run full security audit →</button>
+    </form>
+
+    <div class="trust-row">
+      <span><span class="trust-dot"></span>Real pattern scanning</span>
+      <span><span class="trust-dot"></span>Python-powered backend</span>
+      <span><span class="trust-dot"></span>6 analysis modules</span>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const dz = document.getElementById('dropzone');
+  const fi = document.getElementById('file-input');
+  const label = document.getElementById('file-selected-label');
+
+  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
+  dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+  dz.addEventListener('drop', e => {
+    e.preventDefault(); dz.classList.remove('dragover');
+    fi.files = e.dataTransfer.files;
+    showFile(fi.files[0]);
+  });
+  fi.addEventListener('change', () => showFile(fi.files[0]));
+
+  function showFile(f) {
+    if (!f) return;
+    label.style.display = 'block';
+    label.textContent = '✓ ' + f.name + ' (' + (f.size / 1024).toFixed(0) + ' KB)';
+  }
+
+  document.getElementById('scan-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('[type=submit]');
+    btn.textContent = 'Starting scan…';
+    btn.disabled = true;
+
+    const formData = new FormData(e.target);
+    const res = await fetch('/start-scan', { method: 'POST', body: formData });
+    const { scan_id } = await res.json();
+    window.location.href = '/scan/' + scan_id;
+  });
+</script>
+{% endblock %}

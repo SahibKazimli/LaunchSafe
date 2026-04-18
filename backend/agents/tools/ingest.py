@@ -6,7 +6,9 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from .scanners import EXTENSIONS_TO_SCAN, SKIP_DIRS
+from .scanners import SKIP_DIRS, is_scannable
+
+MAX_FILE_BYTES = 200_000  # per-file cap
 
 
 def _walk_repo(root: str) -> dict[str, str]:
@@ -18,9 +20,11 @@ def _walk_repo(root: str) -> dict[str, str]:
             continue
         if any(part in SKIP_DIRS for part in p.parts):
             continue
-        if p.suffix.lower() not in EXTENSIONS_TO_SCAN:
+        if not is_scannable(p.name):
             continue
         try:
+            if p.stat().st_size > MAX_FILE_BYTES:
+                continue
             rel = str(p.relative_to(root_path))
             out[rel] = p.read_text(encoding="utf-8", errors="replace")
         except Exception:
@@ -33,15 +37,20 @@ def extract_zip(zip_path: str) -> dict[str, str]:
     files: dict[str, str] = {}
     try:
         with zipfile.ZipFile(zip_path) as z:
-            for name in z.namelist():
-                p = Path(name)
+            for info in z.infolist():
+                if info.is_dir():
+                    continue
+                p = Path(info.filename)
                 if any(part in SKIP_DIRS for part in p.parts):
                     continue
-                if p.suffix.lower() in EXTENSIONS_TO_SCAN:
-                    try:
-                        files[name] = z.read(name).decode("utf-8", errors="replace")
-                    except Exception:
-                        pass
+                if not is_scannable(p.name):
+                    continue
+                if info.file_size > MAX_FILE_BYTES:
+                    continue
+                try:
+                    files[info.filename] = z.read(info.filename).decode("utf-8", errors="replace")
+                except Exception:
+                    pass
     except Exception:
         pass
     return files

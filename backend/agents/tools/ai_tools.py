@@ -20,7 +20,7 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 from pydantic import BaseModel, Field
 
-from ..schemas import Finding
+from ..schemas import SEVERITY_RUBRIC, Finding
 
 MAX_FILE_BYTES = 20_000
 MAX_CICD_BUNDLE_BYTES = 40_000
@@ -119,6 +119,7 @@ def ai_scan_file(
     system = (
         "You are a senior application-security engineer. "
         f"{instruction}\n\n"
+        f"{SEVERITY_RUBRIC}\n"
         "Rules:\n"
         "- Only report real, exploitable issues you can justify from the code.\n"
         "- Do NOT invent vulnerabilities. If the file is clean for this focus, "
@@ -126,7 +127,8 @@ def ai_scan_file(
         "- For each finding, set `location` to `path:line` where line is the "
         "line number of the issue in the provided file.\n"
         "- Set `module` to the most specific tag (authz, crypto, injection, "
-        "ssrf, cicd, etc.). `priority` 1 = urgent, 5 = minor."
+        "ssrf, cicd, etc.). `priority` 1 = urgent, 5 = minor.\n"
+        "- Apply the SEVERITY DEFINITIONS above strictly — do not inflate."
     )
     user = f"File: {path}\n\n```\n{snippet}\n```"
 
@@ -176,6 +178,7 @@ def ai_scan_cicd(state: Annotated[dict, InjectedState]) -> str:
 
     system = (
         "You are a DevSecOps expert auditing CI/CD configuration.\n"
+        f"{SEVERITY_RUBRIC}\n"
         "Look for:\n"
         "1. pull_request_target + actions/checkout on PR ref (code execution on untrusted input).\n"
         "2. Actions pinned by tag/branch (@v2, @main) rather than SHA.\n"
@@ -191,7 +194,8 @@ def ai_scan_cicd(state: Annotated[dict, InjectedState]) -> str:
         "Rules:\n"
         "- Set `location` to `path` or `path:job_name:step_name` where possible.\n"
         "- `module` should be 'cicd'.\n"
-        "- Only report real issues with citable rationale."
+        "- Only report real issues with citable rationale.\n"
+        "- Apply the SEVERITY DEFINITIONS above strictly — do not inflate."
     )
 
     structured = _get_llm().with_structured_output(_FileFindings)
@@ -234,7 +238,9 @@ def ai_audit_auth_flow(state: Annotated[dict, InjectedState]) -> str:
 
     system = (
         "You are a senior AppSec engineer specialising in authentication. "
-        "You are reviewing the full auth surface of an application. Look for:\n"
+        "You are reviewing the full auth surface of an application.\n\n"
+        f"{SEVERITY_RUBRIC}\n"
+        "Look for:\n"
         "- JWT validation gaps (alg confusion, missing aud/iss/exp, "
         "excessively long expiries, no signature verification).\n"
         "- OAuth: missing state parameter, PKCE absence on public clients, "
@@ -251,7 +257,8 @@ def ai_audit_auth_flow(state: Annotated[dict, InjectedState]) -> str:
         "Rules:\n"
         "- Cite specific file:line in `location`.\n"
         "- `module` should be 'auth' or 'authz' as appropriate.\n"
-        "- Only report real, exploitable issues."
+        "- Only report real, exploitable issues.\n"
+        "- Apply the SEVERITY DEFINITIONS above strictly — do not inflate."
     )
 
     structured = _get_llm().with_structured_output(_FileFindings)

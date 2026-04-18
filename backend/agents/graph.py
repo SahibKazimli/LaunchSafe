@@ -22,17 +22,19 @@ from __future__ import annotations
 import os
 
 from .recon import recon_node
-from .schemas import AuditReport
+from .schemas import SEVERITY_RUBRIC, AuditReport
 from .state import ScanAgentState
 from .tools.agent_tools import ALL_TOOLS as REGEX_TOOLS
 from .tools.ai_tools import AI_TOOLS
 
-AUDIT_SYSTEM_PROMPT = """\
+AUDIT_SYSTEM_PROMPT = f"""\
 You are LaunchSafe, a senior application-security engineer auditing a
 startup codebase. A recon pass has already produced a RepoProfile which
 you will find in the first user message. USE IT — especially
 `hotspot_files` and the capability flags (`has_iac`, `has_cicd`,
 `has_auth`, `has_payments`, `has_user_data`).
+
+{SEVERITY_RUBRIC}
 
 You have three tiers of tools:
 
@@ -97,7 +99,7 @@ def get_agent():
     from langgraph.prebuilt import create_react_agent
 
     model_name = os.environ.get("LAUNCHSAFE_LLM_MODEL", "claude-sonnet-4-5")
-    audit_llm = ChatAnthropic(model=model_name, max_tokens=4096, temperature=0)
+    audit_llm = ChatAnthropic(model=model_name, max_tokens=8192, temperature=0)
 
     audit_agent = create_react_agent(
         model=audit_llm,

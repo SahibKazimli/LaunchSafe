@@ -1,0 +1,35 @@
+# Local virtualenvs
+venv/
+.venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+
+# Editor / OS junk
+.vscode/
+.idea/
+.DS_Store
+
+# VCS — let the image be reproducible from the build context
+.git/
+.gitignore
+
+# Local secrets — set these as Cloud Run env vars / secrets instead
+backend/.env
+**/.env
+**/.env.local
+
+# Test / cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+coverage.xml
+
+# Cursor / agent transcripts
+.cursor/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/

@@ -33,6 +33,78 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .working-label { font-family: var(--mono); font-size: 12px; color: var(--accent); }
 
+  .branches-panel {
+    margin-top: 18px; background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 12px; overflow: hidden;
+  }
+  .branches-head {
+    padding: 10px 16px; font-family: var(--mono); font-size: 10px;
+    color: var(--muted); text-transform: uppercase; letter-spacing: .08em;
+    border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .branches-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 8px; padding: 12px;
+  }
+  .branch-card {
+    border: 1px solid var(--border2); border-radius: 8px;
+    padding: 10px 12px; background: var(--bg);
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .branch-card .b-name {
+    font-family: var(--mono); font-size: 11px; color: var(--text);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .branch-card .b-meta {
+    font-family: var(--mono); font-size: 10px; color: var(--muted);
+  }
+  .branch-card.b-pending  { opacity: .55; }
+  .branch-card.b-running  { border-color: var(--accent); background: rgba(200,241,53,0.05); }
+  .branch-card.b-done     { border-color: rgba(6,214,160,0.4); }
+  .branch-card.b-error    { border-color: var(--orange); }
+  .b-dot {
+    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+    background: var(--border2);
+  }
+  .branch-card.b-running .b-dot { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+  .branch-card.b-done    .b-dot { background: var(--green); }
+  .branch-card.b-error   .b-dot { background: var(--orange); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
+  /* branch labels inside the live event log */
+  .event .branch {
+    font-family: var(--mono); font-size: 9px; padding: 1px 6px;
+    border: 1px solid var(--border2); border-radius: 3px;
+    color: var(--muted); flex-shrink: 0; text-transform: lowercase;
+    letter-spacing: .04em; min-width: 64px; text-align: center;
+  }
+  .event .branch.b-recon      { color: var(--yellow); border-color: rgba(255,209,102,0.4); }
+  .event .branch.b-payments   { color: #ff7eb6; border-color: rgba(255,126,182,0.4); }
+  .event .branch.b-iac        { color: #b5a4ff; border-color: rgba(181,164,255,0.4); }
+  .event .branch.b-auth       { color: var(--blue); border-color: rgba(76,201,240,0.4); }
+  .event .branch.b-cicd       { color: #8be9fd; border-color: rgba(139,233,253,0.4); }
+  .event .branch.b-general    { color: var(--green); border-color: rgba(6,214,160,0.4); }
+  .event .branch.b-synthesize { color: var(--accent); border-color: rgba(200,241,53,0.5); }
+
+  .event.branch_start, .event.branch_done {
+    border-left-color: var(--accent);
+    background: rgba(200,241,53,0.03);
+  }
+  .event.branch_start .kind, .event.branch_done .kind { color: var(--accent); }
+
+  /* Filter controls */
+  .filter-bar {
+    display: flex; gap: 6px; flex-wrap: wrap;
+  }
+  .filter-chip {
+    font-family: var(--mono); font-size: 10px; padding: 3px 8px;
+    border: 1px solid var(--border2); border-radius: 4px;
+    color: var(--muted); cursor: pointer; user-select: none;
+    background: transparent;
+  }
+  .filter-chip.active { color: var(--accent); border-color: var(--accent); background: rgba(200,241,53,0.06); }
+
   .error-banner {
     background: rgba(255,77,77,0.08); border: 1px solid rgba(255,77,77,0.3);
     border-radius: 10px; padding: 14px 16px; color: var(--red);
@@ -97,8 +169,21 @@
       <div class="working-label" id="working-label">Waiting for first tool call…</div>
     </div>
 
+    <div id="branches-panel" class="branches-panel" style="display:none;">
+      <div class="branches-head">
+        <span>Specialist branches</span>
+        <span id="branches-counter" style="text-transform:none;letter-spacing:0;"></span>
+      </div>
+      <div id="branches-grid" class="branches-grid"></div>
+    </div>
+
     <div class="events-panel">
-      <div class="events-head">Live activity</div>
+      <div class="events-head">
+        <span>Live activity</span>
+        <div class="filter-bar" id="filter-bar">
+          <button class="filter-chip active" data-branch="all">all</button>
+        </div>
+      </div>
       <div id="events-list" class="events-list"></div>
     </div>
   </div>
@@ -113,6 +198,19 @@
   let pollInterval = setInterval(poll, 1500);
   let tickInterval = setInterval(tick, 1000);
   let lastEventCount = 0;
+  const seenBranchChips = new Set(['all']);
+  let activeBranchFilter = 'all';
+  const allEvents = [];
+
+  document.getElementById('filter-bar').addEventListener('click', (e) => {
+    const btn = e.target.closest('.filter-chip');
+    if (!btn) return;
+    activeBranchFilter = btn.dataset.branch;
+    for (const c of document.querySelectorAll('.filter-chip')) {
+      c.classList.toggle('active', c.dataset.branch === activeBranchFilter);
+    }
+    rerenderEvents();
+  });
 
   function tick() {
     const s = Math.round((Date.now() - startedAt) / 1000);
@@ -137,6 +235,44 @@
     ).join('');
   }
 
+  function ensureBranchChip(branch) {
+    if (!branch || seenBranchChips.has(branch)) return;
+    seenBranchChips.add(branch);
+    const bar = document.getElementById('filter-bar');
+    const btn = document.createElement('button');
+    btn.className = 'filter-chip';
+    btn.dataset.branch = branch;
+    btn.textContent = branch;
+    bar.appendChild(btn);
+  }
+
+  function eventMatchesFilter(ev) {
+    if (activeBranchFilter === 'all') return true;
+    return (ev.branch || 'outer') === activeBranchFilter;
+  }
+
+  function renderEventRow(ev) {
+    const row = document.createElement('div');
+    row.className = 'event ' + ev.kind;
+    const branch = ev.branch || 'outer';
+    row.innerHTML =
+      `<span class="t">${ev.t}s</span>` +
+      `<span class="branch b-${branch}">${branch}</span>` +
+      `<span class="kind">${ev.kind}</span>` +
+      `<span class="msg"></span>`;
+    row.querySelector('.msg').textContent = ev.text || '';
+    return row;
+  }
+
+  function rerenderEvents() {
+    const list = document.getElementById('events-list');
+    list.innerHTML = '';
+    for (const ev of allEvents) {
+      if (eventMatchesFilter(ev)) list.appendChild(renderEventRow(ev));
+    }
+    list.scrollTop = list.scrollHeight;
+  }
+
   function renderEvents(events) {
     if (events.length <= lastEventCount) return;
     const list = document.getElementById('events-list');
@@ -144,16 +280,46 @@
     const newOnes = events.slice(lastEventCount);
     lastEventCount = events.length;
     for (const ev of newOnes) {
-      const row = document.createElement('div');
-      row.className = 'event ' + ev.kind;
-      row.innerHTML =
-        `<span class="t">${ev.t}s</span>` +
-        `<span class="kind">${ev.kind}</span>` +
-        `<span class="msg"></span>`;
-      row.querySelector('.msg').textContent = ev.text || '';
-      list.appendChild(row);
+      allEvents.push(ev);
+      ensureBranchChip(ev.branch);
+      if (eventMatchesFilter(ev)) list.appendChild(renderEventRow(ev));
     }
     if (atBottom) list.scrollTop = list.scrollHeight;
+  }
+
+  function renderBranches(branches) {
+    const keys = Object.keys(branches || {}).filter(k => k !== 'recon');
+    if (keys.length === 0) return;
+    document.getElementById('branches-panel').style.display = 'block';
+    const grid = document.getElementById('branches-grid');
+    grid.innerHTML = '';
+    let runningCount = 0, doneCount = 0;
+    const order = ['payments', 'iac', 'auth', 'cicd', 'general', 'synthesize'];
+    const sorted = [...keys].sort(
+      (a, b) => (order.indexOf(a) === -1 ? 99 : order.indexOf(a))
+              - (order.indexOf(b) === -1 ? 99 : order.indexOf(b))
+    );
+    for (const name of sorted) {
+      const b = branches[name];
+      if (b.status === 'running') runningCount++;
+      if (b.status === 'done') doneCount++;
+      const card = document.createElement('div');
+      card.className = `branch-card b-${b.status || 'pending'}`;
+      const tools = b.tool_calls || 0;
+      const findings = b.count || 0;
+      const meta =
+        b.status === 'done'
+          ? `${findings} finding${findings !== 1 ? 's' : ''} · ${tools} call${tools !== 1 ? 's' : ''}`
+          : b.status === 'running'
+            ? `${tools} call${tools !== 1 ? 's' : ''} so far`
+            : 'pending';
+      card.innerHTML =
+        `<span class="b-name"><span class="b-dot"></span>${name}</span>` +
+        `<span class="b-meta">${meta}</span>`;
+      grid.appendChild(card);
+    }
+    document.getElementById('branches-counter').textContent =
+      `${doneCount}/${keys.length} done` + (runningCount ? `, ${runningCount} running` : '');
   }
 
   async function poll() {
@@ -174,19 +340,30 @@
     }
 
     renderRecon(data.repo_profile);
-
-    const done = data.modules_done || [];
     renderEvents(data.events || []);
+    renderBranches(data.branches || {});
 
     const working = document.getElementById('working-label');
     if (data.status === 'running') {
-      if (data.repo_profile) {
-        const auditCalls = done.filter(m => m.id !== 'recon').length;
-        working.textContent = auditCalls
-          ? `Auditing… ${auditCalls} tool call${auditCalls !== 1 ? 's' : ''} completed, ${data.findings_count} finding${data.findings_count !== 1 ? 's' : ''} so far`
-          : 'Audit agent thinking…';
-      } else {
+      const branches = data.branches || {};
+      const total = Object.keys(branches).length;
+      const running = Object.values(branches).filter(b => b.status === 'running').length;
+      const done = Object.values(branches).filter(b => b.status === 'done').length;
+      const totalCalls = Object.values(branches).reduce((a, b) => a + (b.tool_calls || 0), 0);
+      if (!data.repo_profile) {
         working.textContent = 'Recon agent exploring the repo…';
+      } else if (total === 0) {
+        working.textContent = 'Routing to specialist branches…';
+      } else if (running > 0) {
+        working.textContent =
+          `${running} specialist${running !== 1 ? 's' : ''} running in parallel ` +
+          `· ${done}/${total} done · ${totalCalls} tool call${totalCalls !== 1 ? 's' : ''}`;
+      } else if (done > 0 && done < total) {
+        working.textContent = `Waiting on remaining branches… ${done}/${total} done`;
+      } else if (done === total && total > 0) {
+        working.textContent = 'Synthesizing final report…';
+      } else {
+        working.textContent = 'Working…';
       }
     }
 

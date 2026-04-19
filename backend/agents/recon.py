@@ -17,6 +17,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 
+from .runtime_log import emit
 from .schemas import RepoProfile
 from .state import ScanAgentState
 from .tools.agent_tools import list_repo_files, read_file, read_files
@@ -74,10 +75,12 @@ def _build_recon_agent():
     )
 
 
-def recon_node(state: dict[str, Any]) -> dict[str, Any]:
+async def recon_node(state: dict[str, Any]) -> dict[str, Any]:
     """Run the recon sub-agent and surface its RepoProfile to the outer graph."""
+    scan_id = state.get("scan_id", "")
     files = state.get("files", {})
     if not files:
+        emit(scan_id, "warn", "No files ingested; skipping recon", branch="recon")
         empty = RepoProfile(
             stack="unknown (no files ingested)",
             has_iac=False, has_cicd=False, has_auth=False,
@@ -86,11 +89,13 @@ def recon_node(state: dict[str, Any]) -> dict[str, Any]:
         )
         return {"repo_profile": empty.model_dump(), "messages": []}
 
+    emit(scan_id, "branch_start", f"recon starting on {len(files)} files", branch="recon")
+
     global _recon_agent
     if _recon_agent is None:
         _recon_agent = _build_recon_agent()
 
-    result = _recon_agent.invoke({
+    result = await _recon_agent.ainvoke({
         "messages": [{
             "role": "user",
             "content": (
@@ -101,8 +106,21 @@ def recon_node(state: dict[str, Any]) -> dict[str, Any]:
         "files": files,
     })
 
+    for msg in result.get("messages", []) or []:
+        msg_type = getattr(msg, "type", None)
+        if msg_type == "ai":
+            for tc in getattr(msg, "tool_calls", None) or []:
+                tc_name = tc.get("name", "?") if isinstance(tc, dict) else "?"
+                emit(scan_id, "call", f"{tc_name}(...)", branch="recon")
+        elif msg_type == "tool":
+            tool_name = getattr(msg, "name", "?")
+            content = getattr(msg, "content", "") or ""
+            size = len(content) if isinstance(content, str) else 0
+            emit(scan_id, "result", f"{tool_name} → {size}B", branch="recon")
+
     profile = result.get("structured_response")
     if profile is None:
+        emit(scan_id, "warn", "recon returned no structured profile", branch="recon")
         fallback = RepoProfile(
             stack="unknown (recon agent did not return a structured profile)",
             has_iac=False, has_cicd=False, has_auth=False,
@@ -111,14 +129,20 @@ def recon_node(state: dict[str, Any]) -> dict[str, Any]:
         )
         return {"repo_profile": fallback.model_dump(), "messages": []}
 
+    flags = []
+    for f in ("has_iac", "has_cicd", "has_auth", "has_payments", "has_user_data"):
+        if getattr(profile, f, False):
+            flags.append(f.replace("has_", ""))
+    emit(
+        scan_id,
+        "branch_done",
+        f"recon complete: {profile.stack} — flags: {','.join(flags) or 'none'}",
+        branch="recon",
+    )
+
     context_msg = HumanMessage(content=(
         "Recon is complete. Here is the RepoProfile:\n\n"
-        f"{profile.model_dump_json(indent=2)}\n\n"
-        "Use `hotspot_files` as your deep-scan targets. Use AI tools "
-        "(ai_scan_file, ai_scan_cicd, ai_audit_auth_flow) for real "
-        "vulnerability hunting. You may also call the fast regex-triage "
-        "tools (scan_secrets_tool etc.) as a cheap first pass. Now produce "
-        "the final AuditReport."
+        f"{profile.model_dump_json(indent=2)}"
     ))
 
     return {

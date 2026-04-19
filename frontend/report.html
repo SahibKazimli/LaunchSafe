@@ -274,11 +274,14 @@
           <tr><td>Grade</td><td>{{ breakdown.grade }}</td></tr>
         </table>
 
+        <p class="risk-footer" style="margin-top: 14px;">
+          Grade is bucketed on <strong>risk total</strong> (lower = better):
+        </p>
         <div class="breakdown-thresholds">
           {% for label, ceil in breakdown.thresholds %}
-            <span class="th {% if breakdown.grade == label %}active{% endif %}">{{ label }} ≤ {{ ceil }}</span>
+            <span class="th {% if breakdown.grade == label %}active{% endif %}">{{ label }}: risk ≤ {{ ceil }}</span>
           {% endfor %}
-          <span class="th {% if breakdown.grade == 'F' %}active{% endif %}">F &gt; 30</span>
+          <span class="th {% if breakdown.grade == 'F' %}active{% endif %}">F: risk &gt; 30</span>
         </div>
         {% endif %}
       </div>

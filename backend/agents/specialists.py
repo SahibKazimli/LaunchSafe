@@ -251,53 +251,54 @@ def _get_agent(name: str, prompt: str):
     return _AGENTS[name]
 
 
-def _summarize_inner_messages(name: str, scan_id: str, messages: list) -> int:
-    """After a branch finishes, walk its inner messages and emit one event
-    per AI thought / tool call / tool result — all tagged with the branch.
-    Returns the number of tool calls observed (useful for progress UI)."""
-    tool_calls = 0
-    for msg in messages or []:
-        msg_type = getattr(msg, "type", None)
-        if msg_type == "ai":
-            for tc in getattr(msg, "tool_calls", None) or []:
-                tool_calls += 1
-                tc_name = tc.get("name", "?") if isinstance(tc, dict) else "?"
-                args = tc.get("args") or {} if isinstance(tc, dict) else {}
-                arg_parts = []
-                for k, v in list(args.items())[:2]:
-                    s = str(v)
-                    if len(s) > 50:
-                        s = s[:47] + "…"
-                    arg_parts.append(f"{k}={s}")
-                emit(scan_id, "call", f"{tc_name}({', '.join(arg_parts)})", branch=name)
-            content = getattr(msg, "content", "")
-            if isinstance(content, str) and content.strip():
-                emit(scan_id, "think", content.strip(), branch=name)
-            elif isinstance(content, list):
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        txt = (block.get("text") or "").strip()
-                        if txt:
-                            emit(scan_id, "think", txt, branch=name)
-        elif msg_type == "tool":
-            tool_name = getattr(msg, "name", "?")
-            content = getattr(msg, "content", "") or ""
-            size = len(content) if isinstance(content, str) else 0
-            emit(scan_id, "result", f"{tool_name} → {size}B", branch=name)
-    return tool_calls
+def _emit_message(scan_id: str, branch: str, msg, tool_calls_so_far: int) -> int:
+    """Emit live events for a single new message. Returns new tool_calls total."""
+    msg_type = getattr(msg, "type", None)
+    if msg_type == "ai":
+        content = getattr(msg, "content", "")
+        if isinstance(content, str) and content.strip():
+            emit(scan_id, "think", content.strip(), branch=branch)
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    txt = (block.get("text") or "").strip()
+                    if txt:
+                        emit(scan_id, "think", txt, branch=branch)
+        for tc in getattr(msg, "tool_calls", None) or []:
+            tool_calls_so_far += 1
+            tc_name = tc.get("name", "?") if isinstance(tc, dict) else "?"
+            args = tc.get("args") or {} if isinstance(tc, dict) else {}
+            arg_parts = []
+            for k, v in list(args.items())[:2]:
+                s = str(v)
+                if len(s) > 50:
+                    s = s[:47] + "…"
+                arg_parts.append(f"{k}={s}")
+            emit(scan_id, "call", f"{tc_name}({', '.join(arg_parts)})", branch=branch)
+    elif msg_type == "tool":
+        tool_name = getattr(msg, "name", "?")
+        content = getattr(msg, "content", "") or ""
+        size = len(content) if isinstance(content, str) else 0
+        emit(scan_id, "result", f"{tool_name} → {size}B", branch=branch)
+    return tool_calls_so_far
 
 
 def _make_specialist_node(name: str, prompt: str, kickoff_msg: str):
-    """Return an async graph node that runs the named specialist and writes
-    its findings into `branch_findings` (tagged with the branch name)."""
+    """Return an async graph node that runs the named specialist with LIVE
+    event streaming and writes its findings into `branch_findings`."""
 
     async def node(state: dict[str, Any]) -> dict[str, Any]:
         scan_id = state.get("scan_id", "")
         emit(scan_id, "branch_start", f"{name} specialist starting", branch=name)
 
         agent = _get_agent(name, prompt)
+
+        seen_msg_ids: set[str] = set()
+        tool_calls = 0
+        final_state: dict | None = None
+
         try:
-            result = await agent.ainvoke(
+            async for chunk in agent.astream(
                 {
                     "messages": [{"role": "user", "content": kickoff_msg}],
                     "files": state.get("files", {}),
@@ -307,7 +308,17 @@ def _make_specialist_node(name: str, prompt: str, kickoff_msg: str):
                     "branch_findings": [],
                 },
                 {"recursion_limit": SPEC_RECURSION_LIMIT},
-            )
+                stream_mode="values",
+            ):
+                if isinstance(chunk, dict):
+                    final_state = chunk
+                    for msg in chunk.get("messages", []) or []:
+                        msg_id = getattr(msg, "id", None)
+                        if msg_id and msg_id in seen_msg_ids:
+                            continue
+                        if msg_id:
+                            seen_msg_ids.add(msg_id)
+                        tool_calls = _emit_message(scan_id, name, msg, tool_calls)
         except Exception as exc:  # noqa: BLE001
             emit(scan_id, "warn", f"{name} crashed: {str(exc)[:140]}", branch=name)
             return {
@@ -316,17 +327,12 @@ def _make_specialist_node(name: str, prompt: str, kickoff_msg: str):
                 ]
             }
 
-        tool_calls = _summarize_inner_messages(name, scan_id, result.get("messages", []))
-
-        sr = result.get("structured_response")
+        sr = (final_state or {}).get("structured_response")
         if sr is None:
             emit(
-                scan_id,
-                "branch_done",
+                scan_id, "branch_done",
                 f"{name} returned no structured response after {tool_calls} tool calls",
-                branch=name,
-                count=0,
-                tool_calls=tool_calls,
+                branch=name, count=0, tool_calls=tool_calls,
             )
             return {"branch_findings": []}
 
@@ -337,12 +343,9 @@ def _make_specialist_node(name: str, prompt: str, kickoff_msg: str):
             tagged.append(d)
 
         emit(
-            scan_id,
-            "branch_done",
+            scan_id, "branch_done",
             f"{name} finished: {len(tagged)} finding(s) from {tool_calls} tool calls",
-            branch=name,
-            count=len(tagged),
-            tool_calls=tool_calls,
+            branch=name, count=len(tagged), tool_calls=tool_calls,
         )
         return {"branch_findings": tagged}
 

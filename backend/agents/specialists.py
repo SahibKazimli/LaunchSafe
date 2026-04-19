@@ -27,7 +27,12 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from .runtime_log import emit
-from .schemas import COMPLIANCE_INSTRUCTIONS, SEVERITY_RUBRIC, Finding
+from .schemas import (
+    COMPLIANCE_INSTRUCTIONS,
+    CVSS_AND_EXPOSURE_RUBRIC,
+    SEVERITY_RUBRIC,
+    Finding,
+)
 from .state import ScanAgentState
 from .tools.agent_tools import ALL_TOOLS as REGEX_TOOLS
 from .tools.ai_tools import AI_TOOLS
@@ -56,6 +61,8 @@ class _BranchFindings(BaseModel):
 _COMMON_TAIL = f"""\
 
 {SEVERITY_RUBRIC}
+
+{CVSS_AND_EXPOSURE_RUBRIC}
 
 {COMPLIANCE_INSTRUCTIONS}
 

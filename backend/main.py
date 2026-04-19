@@ -17,8 +17,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from agents.tools.agent_tools import SCANNER_TOOL_TO_MODULE
-from agents.tools.ai_tools import AI_TOOL_TO_MODULE
+from agents.runtime_log import set_event_sink
 from agents.tools.ingest import clone_github, extract_zip
 from agents.tools.scanners import (
     compute_score,
@@ -29,8 +28,6 @@ from agents.tools.scanners import (
     scan_privacy,
     scan_secrets,
 )
-
-TOOL_TO_MODULE = {**SCANNER_TOOL_TO_MODULE, **AI_TOOL_TO_MODULE}
 
 app = FastAPI(title="LaunchSafe")
 
@@ -45,34 +42,70 @@ if _STATIC.is_dir():
 scan_store: dict[str, dict] = {}
 
 
-# ════════════════════════════════════════════════════════════════════════════
+# Wire the event-bus that graph nodes use to push live UI events.
+def _push_event(scan_id: str, kind: str, text: str, branch: str | None = None, **extra) -> None:
+    import time as _time
+
+    scan = scan_store.get(scan_id)
+    if scan is None:
+        return
+    started = scan.get("started_at") or _time.time()
+    ev = {
+        "t": round(_time.time() - started, 1),
+        "kind": kind,
+        "text": (text or "")[:280],
+        "branch": branch or "outer",
+    }
+    if extra:
+        ev.update(extra)
+    scan.setdefault("events", []).append(ev)
+    if len(scan["events"]) > 400:
+        del scan["events"][:100]
+
+    if branch and branch != "outer":
+        branch_state = scan.setdefault("branches", {}).setdefault(
+            branch, {"status": "pending", "tool_calls": 0, "count": 0}
+        )
+        if kind == "branch_start":
+            branch_state["status"] = "running"
+        elif kind == "branch_done":
+            branch_state["status"] = "done"
+            if "count" in extra:
+                branch_state["count"] = extra["count"]
+            if "tool_calls" in extra:
+                branch_state["tool_calls"] = extra["tool_calls"]
+        elif kind == "call":
+            branch_state["tool_calls"] = branch_state.get("tool_calls", 0) + 1
+
+
+set_event_sink(_push_event)
+
+
+
 #  AGENT-DRIVEN SCAN
-# ════════════════════════════════════════════════════════════════════════════
+
 
 async def run_scan(scan_id: str, files: dict[str, str]) -> None:
-    """Drive the LangGraph ReAct agent end-to-end and populate scan_store.
+    """Drive the LangGraph multi-agent pipeline end-to-end.
 
-    Streams state updates so the frontend's polling endpoint can show
-    per-module progress in real time. Falls back to a pure-regex scan when
-    no ANTHROPIC_API_KEY is configured, so the demo path always works.
+    Topology lives in `agents/graph.py`:
+        recon -> [general/payments/iac/auth/cicd in parallel] -> synthesize.
+
+    Each node logs branch-tagged events via the shared event-bus
+    (`agents.runtime_log`), so the frontend just polls `scan-status` and
+    renders whatever it finds.
+
+    Falls back to a pure-regex scan if ANTHROPIC_API_KEY is missing.
     """
     import time
 
     scan_store[scan_id]["status"] = "running"
-    scan_started = time.time()
+    scan_store[scan_id]["started_at"] = time.time()
 
-    def log_event(kind: str, text: str, extra: dict | None = None) -> None:
-        ev = {"t": round(time.time() - scan_started, 1), "kind": kind, "text": text[:280]}
-        if extra:
-            ev.update(extra)
-        scan_store[scan_id]["events"].append(ev)
-        if len(scan_store[scan_id]["events"]) > 200:
-            del scan_store[scan_id]["events"][:50]
-
-    log_event("info", f"Starting scan of {len(files)} files")
+    _push_event(scan_id, "info", f"Starting scan of {len(files)} files", branch="outer")
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
-        log_event("warn", "No ANTHROPIC_API_KEY — falling back to regex-only scan")
+        _push_event(scan_id, "warn", "No ANTHROPIC_API_KEY — regex-only fallback", branch="outer")
         await _run_regex_fallback(scan_id, files)
         return
 
@@ -81,133 +114,22 @@ async def run_scan(scan_id: str, files: dict[str, str]) -> None:
 
         agent = get_agent()
         initial = {
-            "messages": [{
-                "role": "user",
-                "content": (
-                    f"Audit the uploaded codebase ({len(files)} files). "
-                    "Use your tools to run the relevant scanners, inspect any "
-                    "suspicious findings with read_file if needed, then return "
-                    "a prioritised AuditReport."
-                ),
-            }],
+            "messages": [],
             "files": files,
             "scan_id": scan_id,
             "target": scan_store[scan_id]["target"],
+            "branch_findings": [],
         }
 
-        final_state = None
-        recon_done = False
-        processed_msg_ids: set[str] = set()
-        tool_row_index: dict[str, int] = {}
-        streamed_findings: list[dict] = []
-        seen_finding_keys: set[tuple] = set()
-
-        def _ingest_ai_tool_result(raw: str) -> int:
-            """Parse findings from an AI tool's JSON response; return count."""
-            import json as _json
-            try:
-                data = _json.loads(raw)
-            except Exception:
-                return 0
-            found = data.get("findings") if isinstance(data, dict) else None
-            if not isinstance(found, list):
-                return 0
-            added = 0
-            for f in found:
-                if not isinstance(f, dict):
-                    continue
-                key = (
-                    f.get("severity", ""),
-                    f.get("title", ""),
-                    f.get("location", ""),
-                )
-                if key in seen_finding_keys:
-                    continue
-                seen_finding_keys.add(key)
-                streamed_findings.append(f)
-                added += 1
-            return added
-
-        def _tool_args_summary(args: dict) -> str:
-            if not args:
-                return ""
-            parts = []
-            for k, v in list(args.items())[:3]:
-                s = str(v)
-                if len(s) > 60:
-                    s = s[:57] + "…"
-                parts.append(f"{k}={s}")
-            return ", ".join(parts)
-
-        async for namespace, state in agent.astream(
-            initial, stream_mode="values", subgraphs=True
-        ):
-            is_outer = namespace == ()
-            if is_outer:
+        final_state: dict | None = None
+        async for state in agent.astream(initial, stream_mode="values"):
+            if isinstance(state, dict):
                 final_state = state
-
-            if (is_outer and not recon_done and isinstance(state, dict)
-                    and state.get("repo_profile")):
-                recon_done = True
-                scan_store[scan_id]["repo_profile"] = state["repo_profile"]
-                scan_store[scan_id]["modules_done"].append(
-                    {"id": "recon", "name": "Repo intake", "count": 1}
-                )
-                stack = state["repo_profile"].get("stack", "")
-                log_event("recon", f"Recon complete: {stack}")
-
-            messages = state.get("messages", []) if isinstance(state, dict) else []
-            for msg in messages or []:
-                msg_type = getattr(msg, "type", None)
-                msg_id = getattr(msg, "id", None)
-                if msg_id and msg_id in processed_msg_ids:
-                    continue
-                if msg_id:
-                    processed_msg_ids.add(msg_id)
-
-                if msg_type == "ai":
-                    content = getattr(msg, "content", "")
-                    if isinstance(content, str) and content.strip():
-                        log_event("think", content.strip())
-                    elif isinstance(content, list):
-                        for block in content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                txt = block.get("text", "").strip()
-                                if txt:
-                                    log_event("think", txt)
-                    for tc in getattr(msg, "tool_calls", None) or []:
-                        tc_name = tc.get("name", "?")
-                        tc_args = _tool_args_summary(tc.get("args") or {})
-                        log_event("call", f"{tc_name}({tc_args})")
-
-                elif msg_type == "tool":
-                    name = getattr(msg, "name", None)
-                    content = getattr(msg, "content", "") or ""
-                    size = len(content) if isinstance(content, str) else 0
-
-                    added = 0
-                    if name in ("ai_scan_file", "ai_scan_cicd", "ai_audit_auth_flow") \
-                            and isinstance(content, str):
-                        added = _ingest_ai_tool_result(content)
-                        scan_store[scan_id]["findings"] = list(streamed_findings)
-
-                    log_event(
-                        "result",
-                        f"{name} → {size}B" + (f", +{added} findings" if added else ""),
-                    )
-
-                    if name not in TOOL_TO_MODULE:
-                        continue
-                    mod_id, mod_name = TOOL_TO_MODULE[name]
-                    rows = scan_store[scan_id]["modules_done"]
-                    if name in tool_row_index:
-                        rows[tool_row_index[name]]["count"] += 1
-                    else:
-                        tool_row_index[name] = len(rows)
-                        rows.append({"id": mod_id, "name": mod_name, "count": 1})
+                profile = state.get("repo_profile")
+                if profile and not scan_store[scan_id].get("repo_profile"):
+                    scan_store[scan_id]["repo_profile"] = profile
 
         report = (final_state or {}).get("structured_response")
-
         report_findings: list[dict] = []
         summary = ""
         top_fixes: list[str] = []
@@ -219,22 +141,25 @@ async def run_scan(scan_id: str, files: dict[str, str]) -> None:
                 summary = getattr(report, "summary", "") or ""
                 top_fixes = list(getattr(report, "top_fixes", []) or [])
                 overall_risk = getattr(report, "overall_risk", "") or ""
-            except Exception:  # noqa: BLE001
+            except Exception:  
                 pass
 
-        if not report_findings and streamed_findings:
-            log_event(
-                "warn",
-                f"Final report was incomplete — using {len(streamed_findings)} findings "
-                "collected from AI tool calls.",
+        salvaged = [
+            f for f in (final_state or {}).get("branch_findings", []) or []
+            if isinstance(f, dict) and "_error" not in f
+        ]
+        if not report_findings and salvaged:
+            _push_event(
+                scan_id, "warn",
+                f"Synthesize produced no report — salvaging {len(salvaged)} branch findings",
+                branch="outer",
             )
-            report_findings = streamed_findings
+            report_findings = salvaged
 
-        if not summary and streamed_findings:
+        if not summary and report_findings:
             summary = (
-                f"Audit complete. Collected {len(streamed_findings)} findings from "
-                "AI deep-scans. (Executive summary unavailable — final report step "
-                "was truncated.)"
+                f"Audit complete. {len(report_findings)} finding(s) across "
+                f"{len(scan_store[scan_id].get('branches', {}))} specialist branches."
             )
 
         score, grade = compute_score(report_findings)
@@ -247,21 +172,31 @@ async def run_scan(scan_id: str, files: dict[str, str]) -> None:
             "top_fixes": top_fixes,
             "overall_risk": overall_risk or ("high" if grade in ("D", "F") else "medium"),
         })
-    except Exception as exc:  # noqa: BLE001
-        if streamed_findings:
-            log_event(
-                "warn",
-                f"Agent crashed, but salvaged {len(streamed_findings)} findings from tool calls.",
+    except Exception as exc:  
+        salvaged = []
+        try:
+            salvaged = [
+                f for f in (final_state or {}).get("branch_findings", []) or []
+                if isinstance(f, dict) and "_error" not in f
+            ]
+        except Exception: 
+            pass
+
+        if salvaged:
+            _push_event(
+                scan_id, "warn",
+                f"Pipeline crashed, but salvaged {len(salvaged)} branch findings.",
+                branch="outer",
             )
-            score, grade = compute_score(streamed_findings)
+            score, grade = compute_score(salvaged)
             scan_store[scan_id].update({
                 "status": "done",
-                "findings": streamed_findings,
+                "findings": salvaged,
                 "score": score,
                 "grade": grade,
                 "summary": (
-                    f"Audit agent crashed before final report ({str(exc)[:120]}). "
-                    f"Showing {len(streamed_findings)} findings collected during the scan."
+                    f"Pipeline crashed before synthesize ({str(exc)[:120]}). "
+                    f"Showing {len(salvaged)} findings collected during the scan."
                 ),
                 "top_fixes": [],
                 "overall_risk": "high" if grade in ("D", "F") else "medium",
@@ -275,6 +210,10 @@ async def run_scan(scan_id: str, files: dict[str, str]) -> None:
 
 async def _run_regex_fallback(scan_id: str, files: dict[str, str]) -> None:
     """Pure-deterministic scan used when no Anthropic key is configured."""
+    import time as _time
+
+    if not scan_store[scan_id].get("started_at"):
+        scan_store[scan_id]["started_at"] = _time.time()
     all_findings: list[dict] = []
     module_fns = [
         ("secrets",  "Secret detection",       scan_secrets),
@@ -308,9 +247,8 @@ async def _run_regex_fallback(scan_id: str, files: dict[str, str]) -> None:
     })
 
 
-# ════════════════════════════════════════════════════════════════════════════
 #  ROUTES
-# ════════════════════════════════════════════════════════════════════════════
+
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
@@ -358,6 +296,8 @@ async def start_scan(
         "findings": [],
         "modules_done": [],
         "events": [],
+        "branches": {},
+        "started_at": None,
         "score": 0,
         "grade": "?",
         "summary": "",
@@ -417,11 +357,12 @@ async def scan_status(scan_id: str):
         "status": scan["status"],
         "target": scan.get("target", ""),
         "modules_done": scan.get("modules_done", []),
+        "branches": scan.get("branches", {}),
         "findings_count": len(scan.get("findings", [])),
         "repo_profile": profile,
         "summary": scan.get("summary", ""),
         "overall_risk": scan.get("overall_risk", ""),
-        "events": scan.get("events", [])[-40:],
+        "events": scan.get("events", [])[-60:],
         "error": scan.get("error"),
     }
 

@@ -1,6 +1,6 @@
 # LaunchSafe — Startup Security Auditor
 
-LaunchSafe scans a GitHub repo (or a ZIP) and returns a prioritized,
+LaunchSafe scans a GitHub repo and returns a prioritized,
 CVSS-scored security report in a few minutes. It is built on a small
 **multi-agent LangGraph pipeline** powered by Claude — a recon agent
 profiles the repo, then specialist sub-agents fan out in parallel

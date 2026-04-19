@@ -81,8 +81,9 @@
     border-radius: 4px; color: var(--muted);
     position: relative; cursor: default;
   }
+  a.comp-tag.linked { cursor: pointer; }
   .comp-tag.linked {
-    cursor: help; color: var(--text);
+    color: var(--text);
     border-color: rgba(76,201,240,0.35);
     background: rgba(76,201,240,0.08);
     text-decoration: none;
@@ -99,13 +100,21 @@
     transition: opacity .15s, transform .15s;
     text-align: left;
   }
+  .comp-pop::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0;
+    top: 100%;
+    height: 10px;
+  }
   .comp-tag.linked:hover .comp-pop,
-  .comp-tag.linked:focus .comp-pop {
+  .comp-tag.linked:focus .comp-pop,
+  .comp-tag.linked:focus-within .comp-pop {
     opacity: 1; pointer-events: auto; transform: translateY(0);
   }
   .comp-pop .pop-title { display: block; font-family: var(--sans); font-size: 12px; font-weight: 500; color: var(--text); margin-bottom: 6px; }
   .comp-pop .pop-summary { display: block; font-family: var(--sans); font-size: 11px; color: var(--muted); line-height: 1.5; margin-bottom: 8px; }
-  .comp-pop .pop-link { display: inline-block; font-family: var(--mono); font-size: 10px; color: var(--blue); text-decoration: none; }
+  .comp-pop .pop-link { display: inline-block; font-family: var(--mono); font-size: 10px; color: var(--blue); text-decoration: none; cursor: pointer; }
   a.comp-tag.linked:hover .comp-pop .pop-link { color: var(--accent); }
 
   .empty-state { padding: 48px 20px; text-align: center; color: var(--muted); font-size: 13px; }

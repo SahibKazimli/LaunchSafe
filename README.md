@@ -7,6 +7,9 @@ profiles the repo, then specialist sub-agents fan out in parallel
 against the parts of the codebase that actually matter, and a final
 synthesize step dedupes and grades the results.
 
+URL: https://launchsafe-851230900226.europe-north2.run.app
+### Note: Very computationally intensive, the process will take a few minutes (around 5-10 mins max)
+
 ## What it checks
 
 | Specialist   | Focus                                                                      |

@@ -95,29 +95,60 @@ async def recon_node(state: dict[str, Any]) -> dict[str, Any]:
     if _recon_agent is None:
         _recon_agent = _build_recon_agent()
 
-    result = await _recon_agent.ainvoke({
-        "messages": [{
-            "role": "user",
-            "content": (
-                f"Profile this repo. It has {len(files)} files. "
-                "Start by calling list_repo_files, then read strategically."
-            ),
-        }],
-        "files": files,
-    })
+    seen_msg_ids: set[str] = set()
+    final_state: dict | None = None
 
-    for msg in result.get("messages", []) or []:
-        msg_type = getattr(msg, "type", None)
-        if msg_type == "ai":
-            for tc in getattr(msg, "tool_calls", None) or []:
-                tc_name = tc.get("name", "?") if isinstance(tc, dict) else "?"
-                emit(scan_id, "call", f"{tc_name}(...)", branch="recon")
-        elif msg_type == "tool":
-            tool_name = getattr(msg, "name", "?")
-            content = getattr(msg, "content", "") or ""
-            size = len(content) if isinstance(content, str) else 0
-            emit(scan_id, "result", f"{tool_name} → {size}B", branch="recon")
+    async for chunk in _recon_agent.astream(
+        {
+            "messages": [{
+                "role": "user",
+                "content": (
+                    f"Profile this repo. It has {len(files)} files. "
+                    "Start by calling list_repo_files, then read strategically."
+                ),
+            }],
+            "files": files,
+            "scan_id": scan_id,
+        },
+        stream_mode="values",
+    ):
+        if not isinstance(chunk, dict):
+            continue
+        final_state = chunk
+        for msg in chunk.get("messages", []) or []:
+            msg_id = getattr(msg, "id", None)
+            if msg_id and msg_id in seen_msg_ids:
+                continue
+            if msg_id:
+                seen_msg_ids.add(msg_id)
+            msg_type = getattr(msg, "type", None)
+            if msg_type == "ai":
+                content = getattr(msg, "content", "")
+                if isinstance(content, str) and content.strip():
+                    emit(scan_id, "think", content.strip(), branch="recon")
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            txt = (block.get("text") or "").strip()
+                            if txt:
+                                emit(scan_id, "think", txt, branch="recon")
+                for tc in getattr(msg, "tool_calls", None) or []:
+                    tc_name = tc.get("name", "?") if isinstance(tc, dict) else "?"
+                    args = tc.get("args") or {} if isinstance(tc, dict) else {}
+                    arg_parts = []
+                    for k, v in list(args.items())[:2]:
+                        s = str(v)
+                        if len(s) > 50:
+                            s = s[:47] + "…"
+                        arg_parts.append(f"{k}={s}")
+                    emit(scan_id, "call", f"{tc_name}({', '.join(arg_parts)})", branch="recon")
+            elif msg_type == "tool":
+                tool_name = getattr(msg, "name", "?")
+                content = getattr(msg, "content", "") or ""
+                size = len(content) if isinstance(content, str) else 0
+                emit(scan_id, "result", f"{tool_name} → {size}B", branch="recon")
 
+    result = final_state or {}
     profile = result.get("structured_response")
     if profile is None:
         emit(scan_id, "warn", "recon returned no structured profile", branch="recon")

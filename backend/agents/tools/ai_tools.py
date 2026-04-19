@@ -20,7 +20,12 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 from pydantic import BaseModel, Field
 
-from ..schemas import COMPLIANCE_INSTRUCTIONS, SEVERITY_RUBRIC, Finding
+from ..schemas import (
+    COMPLIANCE_INSTRUCTIONS,
+    CVSS_AND_EXPOSURE_RUBRIC,
+    SEVERITY_RUBRIC,
+    Finding,
+)
 
 MAX_FILE_BYTES = 20_000
 MAX_CICD_BUNDLE_BYTES = 40_000
@@ -120,6 +125,7 @@ def ai_scan_file(
         "You are a senior application-security engineer. "
         f"{instruction}\n\n"
         f"{SEVERITY_RUBRIC}\n"
+        f"{CVSS_AND_EXPOSURE_RUBRIC}\n"
         f"{COMPLIANCE_INSTRUCTIONS}\n"
         "Rules:\n"
         "- Only report real, exploitable issues you can justify from the code.\n"
@@ -180,6 +186,7 @@ def ai_scan_cicd(state: Annotated[dict, InjectedState]) -> str:
     system = (
         "You are a DevSecOps expert auditing CI/CD configuration.\n"
         f"{SEVERITY_RUBRIC}\n"
+        f"{CVSS_AND_EXPOSURE_RUBRIC}\n"
         f"{COMPLIANCE_INSTRUCTIONS}\n"
         "Look for:\n"
         "1. pull_request_target + actions/checkout on PR ref (code execution on untrusted input).\n"
@@ -242,6 +249,7 @@ def ai_audit_auth_flow(state: Annotated[dict, InjectedState]) -> str:
         "You are a senior AppSec engineer specialising in authentication. "
         "You are reviewing the full auth surface of an application.\n\n"
         f"{SEVERITY_RUBRIC}\n"
+        f"{CVSS_AND_EXPOSURE_RUBRIC}\n"
         f"{COMPLIANCE_INSTRUCTIONS}\n"
         "Look for:\n"
         "- JWT validation gaps (alg confusion, missing aud/iss/exp, "

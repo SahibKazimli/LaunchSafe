@@ -195,9 +195,9 @@
   const SCAN_ID = "{{ scan_id }}";
 
   const startedAt = Date.now();
-  let pollInterval = setInterval(poll, 1500);
+  let pollInterval = setInterval(poll, 1200);
   let tickInterval = setInterval(tick, 1000);
-  let lastEventCount = 0;
+  let lastSeq = 0;
   const seenBranchChips = new Set(['all']);
   let activeBranchFilter = 'all';
   const allEvents = [];
@@ -274,12 +274,11 @@
   }
 
   function renderEvents(events) {
-    if (events.length <= lastEventCount) return;
+    if (!events || events.length === 0) return;
     const list = document.getElementById('events-list');
     const atBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 20;
-    const newOnes = events.slice(lastEventCount);
-    lastEventCount = events.length;
-    for (const ev of newOnes) {
+    for (const ev of events) {
+      if (ev.seq && ev.seq <= lastSeq) continue;
       allEvents.push(ev);
       ensureBranchChip(ev.branch);
       if (eventMatchesFilter(ev)) list.appendChild(renderEventRow(ev));
@@ -325,9 +324,16 @@
   async function poll() {
     let data;
     try {
-      const res = await fetch('/scan-status/' + SCAN_ID);
+      const res = await fetch('/scan-status/' + SCAN_ID + '?since=' + lastSeq);
       data = await res.json();
     } catch (e) { return; }
+    if (typeof data.last_seq === 'number') {
+      // We render new events first (which advances lastSeq via the
+      // per-event check), then update to the server's high-water mark
+      // so we never re-fetch the same events.
+      renderEvents(data.events || []);
+      lastSeq = Math.max(lastSeq, data.last_seq);
+    }
 
     if (data.error) {
       const banner = document.getElementById('error-banner');
@@ -340,7 +346,6 @@
     }
 
     renderRecon(data.repo_profile);
-    renderEvents(data.events || []);
     renderBranches(data.branches || {});
 
     const working = document.getElementById('working-label');

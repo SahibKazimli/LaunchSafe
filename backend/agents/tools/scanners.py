@@ -262,18 +262,171 @@ def scan_api(files: dict[str, str]) -> list[dict]:
     return findings
 
 
+
+# Risk scoring — CVSS-aligned with exposure context
+
+#
+# The headline grade and 0–100 score come from a per-finding contribution:
+#
+#     contribution = cvss_base × exposure_multiplier
+#     risk_total   = sum(contribution for f in findings if is_true_positive)
+#     score        = clamp(round(100 - 2 × risk_total), 0, 100)
+#
+# `cvss_base` is the LLM's CVSS v3.1-aligned 0.0–10.0 score for the finding
+# (it picks a number inside the band of its chosen severity — see
+# CVSS_AND_EXPOSURE_RUBRIC in schemas.py).
+#
+# `exposure_multiplier` reflects whether the vulnerable code actually ships:
+#   production  1.00   - live request handlers, prod IaC, prod auth code
+#   internal    0.60   - admin tools, debug-only endpoints, ops scripts
+#   test        0.15   - tests/, __tests__, conftest.py, fixtures
+#   example     0.05   - examples/, samples/, demo/, cookbook
+#   doc         0.03   - docs/ snippets, README samples
+#
+# A scary-looking eval() in `examples/advanced.py` therefore contributes
+# 9.0 × 0.05 = 0.45 to risk, not 9.0. That is what stops a library repo
+# (FastAPI, Django, …) from getting an F because of pedagogical code.
+#
+# Grade thresholds (calibrated on real repos):
+#   A   risk_total ≤ 5      score ≥ 90
+#   B   risk_total ≤ 12.5   score ≥ 75
+#   C   risk_total ≤ 20     score ≥ 60
+#   D   risk_total ≤ 30     score ≥ 40
+#   F   risk_total > 30     score < 40
+#
+# Backwards compat: if a finding is missing `cvss_base` (e.g. salvaged
+# from a partial run) we fall back to the band default for its severity,
+# and exposure defaults to "production" (worst case).
+
+EXPOSURE_MULTIPLIER: dict[str, float] = {
+    "production": 1.00,
+    "internal":   0.60,
+    "test":       0.15,
+    "example":    0.05,
+    "doc":        0.03,
+}
+
+SEVERITY_DEFAULT_CVSS: dict[str, float] = {
+    "critical": 9.0,
+    "high":     7.5,
+    "medium":   5.0,
+    "low":      2.0,
+}
+
+
+def _normalize_severity(s: object) -> str:
+    return str(s or "low").strip().lower()
+
+
+def _cvss_for(finding: dict) -> float:
+    """Return the CVSS base score for a finding, with sane fallbacks."""
+    raw = finding.get("cvss_base")
+    try:
+        v = float(raw)
+        if 0.0 < v <= 10.0:
+            return v
+    except (TypeError, ValueError):
+        pass
+    return SEVERITY_DEFAULT_CVSS.get(_normalize_severity(finding.get("severity")), 0.0)
+
+
+def infer_exposure_from_path(location: str) -> str:
+    """Conservative path-based inference for `exposure`. Anything ambiguous
+    stays 'production' (worst case for the score)."""
+    p = (location or "").lower().replace("\\", "/")
+    if not p:
+        return "production"
+    parts = p.split("/")
+    name = parts[-1] if parts else ""
+
+    if any(seg in parts for seg in ("tests", "test", "__tests__", "spec", "specs", "fixtures")):
+        return "test"
+    if name.startswith("test_") or name.endswith(
+        ("_test.py", ".test.ts", ".test.tsx", ".spec.ts", ".spec.js", ".spec.tsx")
+    ):
+        return "test"
+    if name == "conftest.py":
+        return "test"
+
+    if any(seg in parts for seg in ("examples", "example", "samples", "sample", "demo", "demos", "cookbook")):
+        return "example"
+
+    if any(seg in parts for seg in ("docs", "doc", "documentation")):
+        return "doc"
+    if name == "readme.md" or (name.endswith(".md") and "docs" in parts):
+        return "doc"
+
+    return "production"
+
+
+def _exposure_for(finding: dict) -> str:
+    raw = (finding.get("exposure") or "").strip().lower()
+    if raw in EXPOSURE_MULTIPLIER:
+        return raw
+    return infer_exposure_from_path(finding.get("location", ""))
+
+
+def score_finding(finding: dict) -> dict:
+    """Compute the risk contribution of one finding. Returns the inputs
+    plus the contribution so the UI can show its math row-by-row."""
+    cvss = _cvss_for(finding)
+    exposure = _exposure_for(finding)
+    mult = EXPOSURE_MULTIPLIER[exposure]
+    contribution = round(cvss * mult, 2)
+    return {
+        "cvss_base": cvss,
+        "exposure": exposure,
+        "exposure_multiplier": mult,
+        "contribution": contribution,
+        "counted": bool(finding.get("is_true_positive", True)),
+    }
+
+
 def compute_score(findings: list[dict]) -> tuple[int, str]:
-    weights = {"critical": 25, "high": 10, "medium": 4, "low": 1}
-    deduction = sum(weights.get(f["severity"], 0) for f in findings)
-    score = max(0, 100 - deduction)
-    if score >= 90:
-        grade = "A"
-    elif score >= 75:
-        grade = "B"
-    elif score >= 60:
-        grade = "C"
-    elif score >= 40:
-        grade = "D"
-    else:
-        grade = "F"
+    """Headline (score, grade). See module-level docstring for the math."""
+    risk_total = 0.0
+    for f in findings:
+        if not f.get("is_true_positive", True):
+            continue
+        s = score_finding(f)
+        risk_total += s["contribution"]
+
+    score = max(0, min(100, round(100 - 2.0 * risk_total)))
+
+    if   risk_total <=  5.0: grade = "A"
+    elif risk_total <= 12.5: grade = "B"
+    elif risk_total <= 20.0: grade = "C"
+    elif risk_total <= 30.0: grade = "D"
+    else:                    grade = "F"
     return score, grade
+
+
+def score_breakdown(findings: list[dict]) -> dict:
+    """Detailed math suitable for the report sidebar / methodology box."""
+    rows = []
+    risk_total = 0.0
+    counted = 0
+    skipped_low_confidence = 0
+    by_exposure: dict[str, int] = {k: 0 for k in EXPOSURE_MULTIPLIER}
+    for f in findings:
+        s = score_finding(f)
+        rows.append(s)
+        by_exposure[s["exposure"]] = by_exposure.get(s["exposure"], 0) + 1
+        if s["counted"]:
+            risk_total += s["contribution"]
+            counted += 1
+        else:
+            skipped_low_confidence += 1
+    score, grade = compute_score(findings)
+    return {
+        "rows": rows,
+        "risk_total": round(risk_total, 2),
+        "score": score,
+        "grade": grade,
+        "counted": counted,
+        "skipped_low_confidence": skipped_low_confidence,
+        "by_exposure": by_exposure,
+        "thresholds": [
+            ("A", 5.0), ("B", 12.5), ("C", 20.0), ("D", 30.0),
+        ],
+    }

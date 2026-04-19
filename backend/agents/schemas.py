@@ -67,6 +67,79 @@ Calibration anchors (so the score makes sense across repos):
     less than ~70% sure it's exploitable in production.
 """
 
+COMPLIANCE_INSTRUCTIONS = """\
+COMPLIANCE REFERENCES — for every finding, attach the compliance controls
+it actually violates. Each reference is an OBJECT with three fields:
+
+  id:      Short identifier shown to the user. Use canonical, recognisable
+           form. Examples:
+             "OWASP A01:2021"           "OWASP A03:2021"           "OWASP API1:2023"
+             "GDPR Art. 32"             "GDPR Art. 5"
+             "CCPA §1798.150"
+             "SOC 2 CC6.1"              "SOC 2 CC7.2"
+             "ISO 27001 A.9.2"          "ISO 27001 A.12.4"
+             "NIST SP 800-53 AC-2"      "NIST SP 800-53 SC-13"
+             "PCI DSS 6.5.1"            "PCI DSS 8.2.3"
+             "HIPAA §164.312(a)(1)"
+
+  summary: ONE sentence, ≤ 25 words, plain language, engineer-facing.
+           Describe what the control REQUIRES (not the violation).
+           Examples:
+             "Restrict access so users can only see and modify resources
+              they are authorised for."
+             "Enforce processor-level security: encryption, access control,
+              and confidentiality of personal data."
+             "Use cryptographically strong, salted hashing (Argon2/bcrypt)
+              for stored passwords; never MD5/SHA1."
+
+  url:     Canonical authoritative URL. Prefer these stable roots:
+             OWASP Top 10:        https://owasp.org/Top10/
+             OWASP API Top 10:    https://owasp.org/API-Security/editions/2023/en/
+             OWASP cheatsheets:   https://cheatsheetseries.owasp.org/cheatsheets/
+             GDPR articles:       https://gdpr-info.eu/art-XX-gdpr/
+             NIST 800-53:         https://csrc.nist.gov/projects/risk-management/sp800-53-controls/release-search
+             AICPA SOC 2 / TSC:   https://www.aicpa-cima.com/topic/audit-assurance/audit-and-assurance-greater-than-soc-2
+             ISO 27001:           https://www.iso.org/standard/82875.html
+             PCI DSS:             https://www.pcisecuritystandards.org/document_library/
+             HIPAA Security Rule: https://www.hhs.gov/hipaa/for-professionals/security/
+           If you do NOT know the exact URL, set url to null. Do NOT
+           hallucinate URLs.
+
+Rules:
+  - Only attach a control if it is REALLY violated by this specific finding.
+    Do not pad the list to look thorough.
+  - Typical finding has 1–3 references. More than 4 is almost always padding.
+  - For pure code-quality issues with no compliance angle, return an empty list.
+"""
+
+
+class ComplianceRef(BaseModel):
+    """One compliance / standard control violated by a finding.
+
+    The agent populates these directly so the UI can show a hover popover
+    with a plain-language explanation and a link to the authoritative source.
+    """
+    id: str = Field(
+        description=(
+            "Short identifier shown to the user, e.g. 'OWASP A03:2021', "
+            "'GDPR Art. 32', 'SOC 2 CC6.1', 'ISO 27001 A.9.2', "
+            "'NIST SP 800-53 AC-2', 'CCPA §1798.150'."
+        )
+    )
+    summary: str = Field(
+        description=(
+            "ONE sentence (≤ 25 words) in plain language explaining what the "
+            "control requires. Engineer-facing, not marketing."
+        )
+    )
+    url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Canonical URL for this control. Omit (null) rather than guess "
+            "if you don't know the exact URL."
+        ),
+    )
+
 
 class Finding(BaseModel):
     severity: str = Field(description="one of: critical, high, medium, low")
@@ -78,7 +151,7 @@ class Finding(BaseModel):
     priority: int = Field(description="1 (most urgent) to 5", ge=1, le=5)
     is_true_positive: bool = True
     rationale: Optional[str] = None
-    compliance: list[str] = Field(default_factory=list)
+    compliance: list[ComplianceRef] = Field(default_factory=list)
 
 
 class AuditReport(BaseModel):

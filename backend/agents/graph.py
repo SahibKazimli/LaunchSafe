@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 
 from .recon import recon_node
-from .schemas import SEVERITY_RUBRIC, AuditReport
+from .schemas import COMPLIANCE_INSTRUCTIONS, SEVERITY_RUBRIC, AuditReport
 from .state import ScanAgentState
 from .tools.agent_tools import ALL_TOOLS as REGEX_TOOLS
 from .tools.ai_tools import AI_TOOLS
@@ -35,6 +35,8 @@ you will find in the first user message. USE IT — especially
 `has_auth`, `has_payments`, `has_user_data`).
 
 {SEVERITY_RUBRIC}
+
+{COMPLIANCE_INSTRUCTIONS}
 
 You have three tiers of tools:
 

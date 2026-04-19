@@ -21,8 +21,25 @@ from typing import Any
 
 from .runtime_log import emit
 from .schemas import AuditReport, ComplianceRef, Finding
+from .tools.scanners import SEVERITY_DEFAULT_CVSS, infer_exposure_from_path
 
 SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+
+def _backfill_score_fields(raw: dict) -> dict:
+    """Make sure every finding has cvss_base + exposure so compute_score
+    has real numbers to work with even when the LLM omits them."""
+    sev = str(raw.get("severity") or "low").lower()
+    if not raw.get("exposure"):
+        raw["exposure"] = infer_exposure_from_path(raw.get("location", ""))
+    cb = raw.get("cvss_base")
+    try:
+        cb_f = float(cb)
+        if not (0.0 < cb_f <= 10.0):
+            raise ValueError
+    except (TypeError, ValueError):
+        raw["cvss_base"] = SEVERITY_DEFAULT_CVSS.get(sev, 0.0)
+    return raw
 
 
 def _sev_key(sev: str) -> int:
@@ -87,18 +104,21 @@ def _dedupe(findings: list[dict]) -> list[Finding]:
                     url=r.get("url"),
                 ))
 
+        backfilled = _backfill_score_fields(raw)
         try:
             f = Finding.model_validate({
-                "severity": str(raw.get("severity", "low")).lower() or "low",
-                "module": raw.get("module") or "general",
-                "title": raw.get("title") or "(untitled)",
-                "location": raw.get("location", ""),
-                "description": raw.get("description", ""),
-                "fix": raw.get("fix", ""),
-                "priority": max(1, min(5, int(raw.get("priority") or 3))),
-                "is_true_positive": bool(raw.get("is_true_positive", True)),
-                "rationale": raw.get("rationale"),
+                "severity": str(backfilled.get("severity", "low")).lower() or "low",
+                "module": backfilled.get("module") or "general",
+                "title": backfilled.get("title") or "(untitled)",
+                "location": backfilled.get("location", ""),
+                "description": backfilled.get("description", ""),
+                "fix": backfilled.get("fix", ""),
+                "priority": max(1, min(5, int(backfilled.get("priority") or 3))),
+                "is_true_positive": bool(backfilled.get("is_true_positive", True)),
+                "rationale": backfilled.get("rationale"),
                 "compliance": refs,
+                "cvss_base": float(backfilled.get("cvss_base") or 0.0),
+                "exposure": backfilled.get("exposure") or "production",
             })
             out.append(f)
         except Exception:  

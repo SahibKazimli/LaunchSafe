@@ -43,6 +43,10 @@ scan_store: dict[str, dict] = {}
 
 
 # Wire the event-bus that graph nodes use to push live UI events.
+EVENT_RING_CAP = 2000     # absolute upper bound; per-scan ring-buffer
+EVENT_API_TAIL = 800      # max events returned in a single /scan-status response
+
+
 def _push_event(scan_id: str, kind: str, text: str, branch: str | None = None, **extra) -> None:
     import time as _time
 
@@ -50,7 +54,10 @@ def _push_event(scan_id: str, kind: str, text: str, branch: str | None = None, *
     if scan is None:
         return
     started = scan.get("started_at") or _time.time()
+    seq = scan.get("event_seq", 0) + 1
+    scan["event_seq"] = seq
     ev = {
+        "seq": seq,
         "t": round(_time.time() - started, 1),
         "kind": kind,
         "text": (text or "")[:280],
@@ -58,9 +65,10 @@ def _push_event(scan_id: str, kind: str, text: str, branch: str | None = None, *
     }
     if extra:
         ev.update(extra)
-    scan.setdefault("events", []).append(ev)
-    if len(scan["events"]) > 400:
-        del scan["events"][:100]
+    events = scan.setdefault("events", [])
+    events.append(ev)
+    if len(events) > EVENT_RING_CAP:
+        del events[:len(events) - EVENT_RING_CAP]
 
     if branch and branch != "outer":
         branch_state = scan.setdefault("branches", {}).setdefault(
@@ -296,6 +304,7 @@ async def start_scan(
         "findings": [],
         "modules_done": [],
         "events": [],
+        "event_seq": 0,
         "branches": {},
         "started_at": None,
         "score": 0,
@@ -346,13 +355,20 @@ async def start_scan(
 
 
 @app.get("/scan-status/{scan_id}")
-async def scan_status(scan_id: str):
+async def scan_status(scan_id: str, since: int = 0):
     scan = scan_store.get(scan_id)
     if not scan:
         return {"error": "not found"}
     profile = scan.get("repo_profile")
     if hasattr(profile, "model_dump"):
         profile = profile.model_dump()
+
+    all_events = scan.get("events", [])
+    new_events = [e for e in all_events if e.get("seq", 0) > since]
+    if len(new_events) > EVENT_API_TAIL:
+        new_events = new_events[-EVENT_API_TAIL:]
+    last_seq = scan.get("event_seq", 0)
+
     return {
         "status": scan["status"],
         "target": scan.get("target", ""),
@@ -362,7 +378,8 @@ async def scan_status(scan_id: str):
         "repo_profile": profile,
         "summary": scan.get("summary", ""),
         "overall_risk": scan.get("overall_risk", ""),
-        "events": scan.get("events", [])[-60:],
+        "events": new_events,
+        "last_seq": last_seq,
         "error": scan.get("error"),
     }
 

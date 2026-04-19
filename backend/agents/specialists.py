@@ -34,8 +34,10 @@ from .tools.ai_tools import AI_TOOLS
 
 ALL_AGENT_TOOLS = REGEX_TOOLS + AI_TOOLS
 
-SPEC_RECURSION_LIMIT = 30
+SPEC_RECURSION_LIMIT = 60
 SPEC_MAX_TOKENS = 4096
+
+AI_SCAN_TOOL_NAMES = {"ai_scan_file", "ai_scan_cicd", "ai_audit_auth_flow"}
 
 
 class _BranchFindings(BaseModel):
@@ -251,8 +253,33 @@ def _get_agent(name: str, prompt: str):
     return _AGENTS[name]
 
 
-def _emit_message(scan_id: str, branch: str, msg, tool_calls_so_far: int) -> int:
-    """Emit live events for a single new message. Returns new tool_calls total."""
+def _parse_ai_tool_findings(raw: str) -> list[dict]:
+    """Parse the JSON payload an AI deep-scan tool returns into a list of
+    raw finding dicts. Used to salvage findings when the agent crashes
+    before producing its final structured_response."""
+    import json as _json
+    try:
+        data = _json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return []
+    if not isinstance(data, dict):
+        return []
+    found = data.get("findings")
+    if not isinstance(found, list):
+        return []
+    return [f for f in found if isinstance(f, dict)]
+
+
+def _emit_message(
+    scan_id: str,
+    branch: str,
+    msg,
+    tool_calls_so_far: int,
+    salvage_bucket: list[dict],
+) -> int:
+    """Emit live events for a single new message. If the message is an AI
+    deep-scan tool result, also stash its findings into `salvage_bucket`
+    so they survive a downstream agent crash."""
     msg_type = getattr(msg, "type", None)
     if msg_type == "ai":
         content = getattr(msg, "content", "")
@@ -279,7 +306,14 @@ def _emit_message(scan_id: str, branch: str, msg, tool_calls_so_far: int) -> int
         tool_name = getattr(msg, "name", "?")
         content = getattr(msg, "content", "") or ""
         size = len(content) if isinstance(content, str) else 0
-        emit(scan_id, "result", f"{tool_name} → {size}B", branch=branch)
+        added = 0
+        if tool_name in AI_SCAN_TOOL_NAMES and isinstance(content, str):
+            for f in _parse_ai_tool_findings(content):
+                f.setdefault("_branch", branch)
+                salvage_bucket.append(f)
+                added += 1
+        suffix = f", +{added} salvaged" if added else ""
+        emit(scan_id, "result", f"{tool_name} → {size}B{suffix}", branch=branch)
     return tool_calls_so_far
 
 
@@ -296,6 +330,8 @@ def _make_specialist_node(name: str, prompt: str, kickoff_msg: str):
         seen_msg_ids: set[str] = set()
         tool_calls = 0
         final_state: dict | None = None
+        salvage_bucket: list[dict] = []
+        crashed_with: str | None = None
 
         try:
             async for chunk in agent.astream(
@@ -318,35 +354,52 @@ def _make_specialist_node(name: str, prompt: str, kickoff_msg: str):
                             continue
                         if msg_id:
                             seen_msg_ids.add(msg_id)
-                        tool_calls = _emit_message(scan_id, name, msg, tool_calls)
+                        tool_calls = _emit_message(
+                            scan_id, name, msg, tool_calls, salvage_bucket
+                        )
         except Exception as exc:  # noqa: BLE001
-            emit(scan_id, "warn", f"{name} crashed: {str(exc)[:140]}", branch=name)
-            return {
-                "branch_findings": [
-                    {"_branch": name, "_error": str(exc)[:200]}
-                ]
-            }
+            crashed_with = str(exc)[:200]
+            emit(scan_id, "warn", f"{name} crashed: {crashed_with[:140]}", branch=name)
 
-        sr = (final_state or {}).get("structured_response")
-        if sr is None:
-            emit(
-                scan_id, "branch_done",
-                f"{name} returned no structured response after {tool_calls} tool calls",
-                branch=name, count=0, tool_calls=tool_calls,
-            )
-            return {"branch_findings": []}
-
+        sr = (final_state or {}).get("structured_response") if not crashed_with else None
         tagged: list[dict] = []
-        for f in getattr(sr, "findings", []) or []:
-            d = f.model_dump()
-            d["_branch"] = name
-            tagged.append(d)
+
+        if sr is not None:
+            for f in getattr(sr, "findings", []) or []:
+                d = f.model_dump()
+                d["_branch"] = name
+                tagged.append(d)
+
+        if not tagged and salvage_bucket:
+            # Either the agent crashed mid-flight or never produced a
+            # structured response. The findings the AI tools already
+            # surfaced are still trustworthy — keep them.
+            seen_keys: set[tuple] = set()
+            for f in salvage_bucket:
+                key = (f.get("title", ""), f.get("location", ""))
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                tagged.append(f)
+            emit(
+                scan_id, "info",
+                f"{name} salvaged {len(tagged)} finding(s) from intermediate tool calls",
+                branch=name,
+            )
 
         emit(
             scan_id, "branch_done",
-            f"{name} finished: {len(tagged)} finding(s) from {tool_calls} tool calls",
+            f"{name} finished: {len(tagged)} finding(s) from {tool_calls} tool calls"
+            + (" (crashed)" if crashed_with else ""),
             branch=name, count=len(tagged), tool_calls=tool_calls,
         )
+
+        if not tagged and crashed_with:
+            return {
+                "branch_findings": [
+                    {"_branch": name, "_error": crashed_with}
+                ]
+            }
         return {"branch_findings": tagged}
 
     node.__name__ = f"{name}_node"

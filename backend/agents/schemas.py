@@ -69,7 +69,12 @@ Calibration anchors (so the score makes sense across repos):
 
 COMPLIANCE_INSTRUCTIONS = """\
 COMPLIANCE REFERENCES — for every finding, attach the compliance controls
-it actually violates. Each reference is an OBJECT with three fields:
+it actually violates. Each reference is an OBJECT with three fields.
+
+AUDIENCE NOTE: the reader is a startup founder or non-security engineer,
+NOT a CISO. Your summary and your URL must both be useful to someone who
+has 30 seconds to understand the issue. Homepage / framework-root URLs
+are USELESS — link to the SPECIFIC control or article.
 
   id:      Short identifier shown to the user. Use canonical, recognisable
            form. Examples:
@@ -82,30 +87,113 @@ it actually violates. Each reference is an OBJECT with three fields:
              "PCI DSS 6.5.1"            "PCI DSS 8.2.3"
              "HIPAA §164.312(a)(1)"
 
-  summary: ONE sentence, ≤ 25 words, plain language, engineer-facing.
-           Describe what the control REQUIRES (not the violation).
-           Examples:
-             "Restrict access so users can only see and modify resources
-              they are authorised for."
-             "Enforce processor-level security: encryption, access control,
-              and confidentiality of personal data."
-             "Use cryptographically strong, salted hashing (Argon2/bcrypt)
-              for stored passwords; never MD5/SHA1."
+  summary: ONE sentence, ≤ 30 words, plain English. Two parts in one breath:
+             (a) what the control requires, in concrete terms a non-expert
+                 can act on, AND
+             (b) why the founder should care (regulatory exposure, customer
+                 trust, audit blocker, fine size — whichever is most real).
+           Avoid jargon. No "shall", no "ensure that", no acronyms unless
+           defined. Examples:
+             OWASP A01:2021 →
+               "Make sure logged-in users can only access their own data —
+                broken access control is the #1 cause of data breaches in
+                modern web apps."
+             GDPR Art. 32 →
+               "EU law requires real technical safeguards (encryption, access
+                control) on personal data; failures can mean fines of up to
+                4% of global annual revenue."
+             SOC 2 CC6.1 →
+               "Auditors will ask how you restrict who can reach production
+                data; without proper access controls, you cannot pass a
+                SOC 2 Type II audit — which most enterprise customers require."
 
-  url:     Canonical authoritative URL. Prefer these stable roots:
-             OWASP Top 10:        https://owasp.org/Top10/
-             OWASP API Top 10:    https://owasp.org/API-Security/editions/2023/en/
-             OWASP cheatsheets:   https://cheatsheetseries.owasp.org/cheatsheets/
-             GDPR articles:       https://gdpr-info.eu/art-XX-gdpr/
-             NIST 800-53:         https://csrc.nist.gov/projects/risk-management/sp800-53-controls/release-search
-             AICPA SOC 2 / TSC:   https://www.aicpa-cima.com/topic/audit-assurance/audit-and-assurance-greater-than-soc-2
-             ISO 27001:           https://www.iso.org/standard/82875.html
-             PCI DSS:             https://www.pcisecuritystandards.org/document_library/
-             HIPAA Security Rule: https://www.hhs.gov/hipaa/for-professionals/security/
-           If you do NOT know the exact URL, set url to null. Do NOT
-           hallucinate URLs.
+  url:     A DEEP link to the specific control or article — NOT a homepage.
+           This is non-negotiable: a founder clicking "Open standard" must
+           land on text that explains THIS issue, not a directory page.
 
-Rules:
+           Use these patterns. Replace the placeholder with the right value:
+
+             OWASP Top 10 (Web):
+               https://owasp.org/Top10/A0X_2021-Slug-With-Underscores/
+               Real examples:
+                 https://owasp.org/Top10/A01_2021-Broken_Access_Control/
+                 https://owasp.org/Top10/A02_2021-Cryptographic_Failures/
+                 https://owasp.org/Top10/A03_2021-Injection/
+                 https://owasp.org/Top10/A05_2021-Security_Misconfiguration/
+                 https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures/
+
+             OWASP API Top 10 (2023):
+               https://owasp.org/API-Security/editions/2023/en/0xaX-slug-name/
+               Real examples:
+                 https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/
+                 https://owasp.org/API-Security/editions/2023/en/0xa2-broken-authentication/
+                 https://owasp.org/API-Security/editions/2023/en/0xa4-unrestricted-resource-consumption/
+
+             OWASP Cheatsheets (best operational guidance):
+               https://cheatsheetseries.owasp.org/cheatsheets/<TOPIC>_Cheat_Sheet.html
+               Real examples:
+                 https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html
+                 https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html
+                 https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
+                 https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
+                 https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html
+                 https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html
+
+             GDPR (deep article links):
+               https://gdpr-info.eu/art-XX-gdpr/
+               Real examples:
+                 https://gdpr-info.eu/art-32-gdpr/   (security of processing)
+                 https://gdpr-info.eu/art-5-gdpr/    (principles)
+                 https://gdpr-info.eu/art-25-gdpr/   (privacy by design)
+                 https://gdpr-info.eu/art-33-gdpr/   (breach notification)
+
+             CCPA (specific section):
+               https://leginfo.legislature.ca.gov/faces/codes_displaySection.xhtml?lawCode=CIV&sectionNum=1798.XXX
+               Real example:
+                 https://leginfo.legislature.ca.gov/faces/codes_displaySection.xhtml?lawCode=CIV&sectionNum=1798.150
+
+             NIST SP 800-53 (specific control):
+               https://csrc.nist.gov/projects/risk-management/sp800-53-controls/release-search#!/control?version=5.1&number=XX-N
+               Real examples:
+                 https://csrc.nist.gov/projects/risk-management/sp800-53-controls/release-search#!/control?version=5.1&number=AC-2
+                 https://csrc.nist.gov/projects/risk-management/sp800-53-controls/release-search#!/control?version=5.1&number=SC-13
+
+             HIPAA (Cornell deep links):
+               https://www.law.cornell.edu/cfr/text/45/164.XXX
+               Real example:
+                 https://www.law.cornell.edu/cfr/text/45/164.312   (technical safeguards)
+                 https://www.law.cornell.edu/cfr/text/45/164.308   (administrative safeguards)
+
+           Frameworks WITHOUT freely available deep links — use these
+           founder-readable explainers (curated, plain-language) when
+           a deep authoritative link does NOT exist:
+
+             SOC 2 (specific TSC):
+               https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022
+                 (official PDF — points to the criterion, but PDF root)
+               If unsure, set url to null — DO NOT link to the AICPA homepage.
+
+             ISO 27001:
+               https://www.iso.org/standard/27001  or set url to null.
+               The standard text is paywalled; do not pretend otherwise.
+
+             PCI DSS (specific requirement):
+               https://docs-prv.pcisecuritystandards.org/PCI%20DSS/Standard/PCI-DSS-v4_0.pdf
+                 (PDF — open and Ctrl+F the requirement number)
+               If unsure, set url to null.
+
+  HARD RULES on URLs:
+    - NEVER link to a framework HOMEPAGE (https://owasp.org/, https://gdpr-info.eu/,
+      https://csrc.nist.gov/, https://www.iso.org/). That is useless to the
+      reader and an instant credibility hit.
+    - NEVER guess a URL. If you can't construct the deep link from the
+      patterns above, set url to null and let the summary do the work.
+    - URLs you produce must be syntactically plausible — use the EXACT
+      patterns above with the right placeholders filled in.
+    - When in doubt between two URL choices, prefer the OWASP Cheatsheet
+      over the Top-10 page (the cheatsheet has actionable code guidance).
+
+Rules on quantity:
   - Only attach a control if it is REALLY violated by this specific finding.
     Do not pad the list to look thorough.
   - Typical finding has 1–3 references. More than 4 is almost always padding.
@@ -128,15 +216,21 @@ class ComplianceRef(BaseModel):
     )
     summary: str = Field(
         description=(
-            "ONE sentence (≤ 25 words) in plain language explaining what the "
-            "control requires. Engineer-facing, not marketing."
+            "ONE plain-English sentence (≤ 30 words) for a startup founder, "
+            "not a security expert. State (a) what the control requires, in "
+            "concrete terms, AND (b) why the founder should care (fines, "
+            "audit blocker, customer trust). No jargon."
         )
     )
     url: Optional[str] = Field(
         default=None,
         description=(
-            "Canonical URL for this control. Omit (null) rather than guess "
-            "if you don't know the exact URL."
+            "DEEP link to the specific control / article — NOT a homepage. "
+            "Examples: 'https://owasp.org/Top10/A01_2021-Broken_Access_Control/', "
+            "'https://gdpr-info.eu/art-32-gdpr/', "
+            "'https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html'. "
+            "Set to null if you don't know the exact deep URL — never guess "
+            "and never link to a framework root page."
         ),
     )
 

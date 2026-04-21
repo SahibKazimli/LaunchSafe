@@ -2,7 +2,7 @@
 
 LaunchSafe scans a GitHub repo and returns a prioritized,
 CVSS-scored security report in a few minutes. It is built on a small
-**multi-agent LangGraph pipeline** powered by Claude — a recon agent
+**multi-agent LangGraph pipeline** powered by Claude. A recon agent
 profiles the repo, then specialist sub-agents fan out in parallel
 against the parts of the codebase that actually matter, and a final
 synthesize step dedupes and grades the results.
@@ -74,16 +74,6 @@ uvicorn main:app --reload
 # → http://127.0.0.1:8000
 ```
 
-The boot log prints the first 12 chars of the loaded API key so you
-can confirm which one is being used:
-
-```
-[LaunchSafe] ANTHROPIC_API_KEY loaded: sk-ant-api03…
-```
-
-Without an API key the app falls back to a regex-only scan (useful for
-local dev, but the AI specialists are where the real value is).
-
 ## Repo layout
 
 ```
@@ -142,7 +132,7 @@ the report sidebar.
 
 ## Tech stack
 
-- **FastAPI** + **Jinja2** — web layer, no JS framework
+- **FastAPI** + **Jinja2** — web layer, no JS framework (yet)
 - **LangGraph** — agent orchestration (conditional fan-out, parallel branches, state reducers)
 - **LangChain** + **Anthropic Claude** — sub-agent reasoning and structured output
 - **Pydantic** — typed schemas for `Finding` / `AuditReport` / `ComplianceRef`

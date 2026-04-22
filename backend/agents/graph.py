@@ -39,15 +39,15 @@ _compiled = None
 def get_agent():
     """Build and cache the compiled outer graph.
 
-    Raises RuntimeError if ANTHROPIC_API_KEY is missing at call time.
+    Raises RuntimeError if no LLM API key is set at call time.
     """
     global _compiled
     if _compiled is not None:
         return _compiled
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    if not os.environ.get("GEMINI_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
         raise RuntimeError(
-            "ANTHROPIC_API_KEY is not set. Copy .env.example to .env and fill it in."
+            "No LLM API key set. Add GEMINI_API_KEY or ANTHROPIC_API_KEY to .env."
         )
 
     from langgraph.graph import END, START, StateGraph

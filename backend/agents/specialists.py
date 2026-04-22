@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 from core.config import (
     SPEC_MAX_TOKENS,
     SPEC_MAX_TOOL_CALLS,
-    SPEC_RECURSION_LIMIT,
+    spec_react_recursion_limit,
 )
 from .runtime_log import emit
 from .schemas import (
@@ -85,6 +85,15 @@ Hard rules:
   - One sentence in `notes` summarising what you checked. If you found
     nothing, say so explicitly — empty findings + "checked X, Y, Z, all
     clean" is a valid, useful result.
+
+Step budget (mandatory):
+  - You may use at most {SPEC_MAX_TOOL_CALLS} tool invocations in total
+    (all tools count: list/read/regex/ai_scan_*). Plan triage in few calls,
+    then spend the rest on the highest-signal paths only.
+  - When you are at or one step from that cap, you MUST return
+    `_BranchFindings` on your next model turn with **no further tools** —
+    partial results are always better than stalling. Say what is unchecked
+    in `notes` if you had to cut short.
 """
 
 
@@ -287,7 +296,7 @@ def _make_specialist_node(name: str, prompt: str, kickoff_msg: str):
                     "target": state.get("target", ""),
                     "branch_findings": [],
                 },
-                {"recursion_limit": SPEC_RECURSION_LIMIT},
+                {"recursion_limit": spec_react_recursion_limit()},
                 stream_mode="values",
             ):
                 if isinstance(chunk, dict):
@@ -302,7 +311,25 @@ def _make_specialist_node(name: str, prompt: str, kickoff_msg: str):
                     )
         except Exception as exc:
             crashed_with = str(exc)[:200]
-            emit(scan_id, "warn", f"{name} crashed: {crashed_with[:140]}", branch=name)
+            is_step_limit = (
+                "recursion limit" in str(exc).lower()
+                or type(exc).__name__ == "GraphRecursionError"
+            )
+            if is_step_limit and (final_state or {}).get("structured_response") is not None:
+                emit(
+                    scan_id,
+                    "info",
+                    f"{name} hit max graph steps but kept a structured result",
+                    branch=name,
+                )
+                crashed_with = None
+            else:
+                emit(
+                    scan_id,
+                    "warn",
+                    f"{name} crashed: {crashed_with[:140]}",
+                    branch=name,
+                )
 
         sr = (final_state or {}).get("structured_response") if not crashed_with else None
         tagged: list[dict] = []

@@ -196,10 +196,10 @@ def _llm_summary(target: str, findings: list[Finding], branches: dict[str, int])
         return None
 
     rendered = []
-    for f in findings[:30]:
+    for finding in findings[:30]:
         rendered.append(
-            f"- [{f.severity}] {f.title} @ {f.location} (priority {f.priority})\n"
-            f"  fix: {f.fix.strip()[:200]}"
+            f"- [{finding.severity}] {finding.title} @ {finding.location} (priority {finding.priority})\n"
+            f"  fix: {finding.fix.strip()[:200]}"
         )
     body = "\n".join(rendered)
 

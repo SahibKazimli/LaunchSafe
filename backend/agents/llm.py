@@ -14,7 +14,7 @@ Provider selection order
 Switching provider is a one-line change in ``.env``::
 
     LAUNCHSAFE_LLM_MODEL=gemini-3.0-flash   # cheap + fast
-    LAUNCHSAFE_LLM_MODEL=gemini-3.0-pro     # higher quality
+    LAUNCHSAFE_LLM_MODEL=gemini-3.1-pro     # higher quality
     LAUNCHSAFE_LLM_MODEL=claude-sonnet-4-5  # back to Claude
 """
 
@@ -46,8 +46,7 @@ def get_llm(max_tokens: int | None = None):
     return _make_anthropic(model, **kwargs)
 
 
-
-# Internal helpers  
+# Internal helpers
 
 def _is_gemini(model: str) -> bool:
     return model.lower().startswith("gemini")

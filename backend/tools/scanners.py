@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from core.config import EXPOSURE_MULTIPLIER, GRADE_THRESHOLDS, SEVERITY_DEFAULT_CVSS
+
 SECRET_PATTERNS = [
     (r"AKIA[0-9A-Z]{16}", "AWS Access Key ID", "critical"),
     (r"sk_live_[0-9a-zA-Z]{24,}", "Stripe Live Secret Key", "critical"),
@@ -298,20 +300,8 @@ def scan_api(files: dict[str, str]) -> list[dict]:
 # from a partial run) we fall back to the band default for its severity,
 # and exposure defaults to "production" (worst case).
 
-EXPOSURE_MULTIPLIER: dict[str, float] = {
-    "production": 1.00,
-    "internal":   0.60,
-    "test":       0.15,
-    "example":    0.05,
-    "doc":        0.03,
-}
-
-SEVERITY_DEFAULT_CVSS: dict[str, float] = {
-    "critical": 9.0,
-    "high":     7.5,
-    "medium":   5.0,
-    "low":      2.0,
-}
+# EXPOSURE_MULTIPLIER, SEVERITY_DEFAULT_CVSS, and GRADE_THRESHOLDS
+# are now imported from agents.config
 
 
 def _normalize_severity(s: object) -> str:
@@ -393,11 +383,11 @@ def compute_score(findings: list[dict]) -> tuple[int, str]:
 
     score = max(0, min(100, round(100 - 2.0 * risk_total)))
 
-    if   risk_total <=  5.0: grade = "A"
-    elif risk_total <= 12.5: grade = "B"
-    elif risk_total <= 20.0: grade = "C"
-    elif risk_total <= 30.0: grade = "D"
-    else:                    grade = "F"
+    grade = "F"
+    for g, threshold in GRADE_THRESHOLDS:
+        if risk_total <= threshold:
+            grade = g
+            break
     return score, grade
 
 
@@ -426,7 +416,5 @@ def score_breakdown(findings: list[dict]) -> dict:
         "counted": counted,
         "skipped_low_confidence": skipped_low_confidence,
         "by_exposure": by_exposure,
-        "thresholds": [
-            ("A", 5.0), ("B", 12.5), ("C", 20.0), ("D", 30.0),
-        ],
+        "thresholds": GRADE_THRESHOLDS,
     }

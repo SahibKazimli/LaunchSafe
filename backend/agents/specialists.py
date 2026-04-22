@@ -14,18 +14,24 @@ Branches:
   auth_audit      — runs if has_auth (covers crypto + session + IDOR)
   cicd_audit      — runs if has_cicd
 
-Each specialist gets the FULL tool set so it can still explore. Its
+Each specialist gets the full tool set so it can still explore. Its
 prompt is what narrows the focus — that lets a specialist follow a thread
 into adjacent code without us having to plumb a custom tool list.
+
+This is where I think we can also use that Orchestration layer we talked about to refine agent behavior.
 """
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from pydantic import BaseModel, Field
 
+from core.config import (
+    SPEC_MAX_TOKENS,
+    SPEC_MAX_TOOL_CALLS,
+    SPEC_RECURSION_LIMIT,
+)
 from .runtime_log import emit
 from .schemas import (
     COMPLIANCE_INSTRUCTIONS,
@@ -34,15 +40,11 @@ from .schemas import (
     Finding,
 )
 from .state import ScanAgentState
-from .tools.agent_tools import ALL_TOOLS as REGEX_TOOLS
-from .tools.ai_tools import AI_TOOLS
+from .stream import collect_salvage, iter_stream_events
+from tools.agent_tools import ALL_TOOLS as REGEX_TOOLS
+from tools.ai_tools import AI_TOOLS
 
 ALL_AGENT_TOOLS = REGEX_TOOLS + AI_TOOLS
-
-SPEC_RECURSION_LIMIT = 60
-SPEC_MAX_TOKENS = 4096
-
-AI_SCAN_TOOL_NAMES = {"ai_scan_file", "ai_scan_cicd", "ai_audit_auth_flow"}
 
 
 class _BranchFindings(BaseModel):
@@ -186,7 +188,7 @@ You ONLY produce findings for:
     self-hosted runners on public-trigger workflows.
   - GitLab CI / CircleCI / Buildkite: equivalent patterns.
   - Dockerfile: USER root (no USER directive), `ADD <url>` for remote
-    fetches, `:latest` base images, `apt-get install` without `&& rm
+    fetches, `:latest` base images, `apt-get install` without `&&\ rm
     -rf /var/lib/apt/lists/*`, secrets baked into image layers.
   - docker-compose: `privileged: true`, `network_mode: host`, secrets
     passed as plain env vars, exposed daemon socket.
@@ -239,11 +241,10 @@ _AGENTS: dict[str, Any] = {}
 
 
 def _build_specialist(name: str, prompt: str):
-    from langchain_anthropic import ChatAnthropic
+    from agents.llm import get_llm
     from langgraph.prebuilt import create_react_agent
 
-    model_name = os.environ.get("LAUNCHSAFE_LLM_MODEL", "claude-sonnet-4-5")
-    llm = ChatAnthropic(model=model_name, max_tokens=SPEC_MAX_TOKENS, temperature=0)
+    llm = get_llm(max_tokens=SPEC_MAX_TOKENS)
 
     return create_react_agent(
         model=llm,
@@ -258,70 +259,6 @@ def _get_agent(name: str, prompt: str):
     if name not in _AGENTS:
         _AGENTS[name] = _build_specialist(name, prompt)
     return _AGENTS[name]
-
-
-def _parse_ai_tool_findings(raw: str) -> list[dict]:
-    """Parse the JSON payload an AI deep-scan tool returns into a list of
-    raw finding dicts. Used to salvage findings when the agent crashes
-    before producing its final structured_response."""
-    import json as _json
-    try:
-        data = _json.loads(raw)
-    except Exception:  # noqa: BLE001
-        return []
-    if not isinstance(data, dict):
-        return []
-    found = data.get("findings")
-    if not isinstance(found, list):
-        return []
-    return [f for f in found if isinstance(f, dict)]
-
-
-def _emit_message(
-    scan_id: str,
-    branch: str,
-    msg,
-    tool_calls_so_far: int,
-    salvage_bucket: list[dict],
-) -> int:
-    """Emit live events for a single new message. If the message is an AI
-    deep-scan tool result, also stash its findings into `salvage_bucket`
-    so they survive a downstream agent crash."""
-    msg_type = getattr(msg, "type", None)
-    if msg_type == "ai":
-        content = getattr(msg, "content", "")
-        if isinstance(content, str) and content.strip():
-            emit(scan_id, "think", content.strip(), branch=branch)
-        elif isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    txt = (block.get("text") or "").strip()
-                    if txt:
-                        emit(scan_id, "think", txt, branch=branch)
-        for tc in getattr(msg, "tool_calls", None) or []:
-            tool_calls_so_far += 1
-            tc_name = tc.get("name", "?") if isinstance(tc, dict) else "?"
-            args = tc.get("args") or {} if isinstance(tc, dict) else {}
-            arg_parts = []
-            for k, v in list(args.items())[:2]:
-                s = str(v)
-                if len(s) > 50:
-                    s = s[:47] + "…"
-                arg_parts.append(f"{k}={s}")
-            emit(scan_id, "call", f"{tc_name}({', '.join(arg_parts)})", branch=branch)
-    elif msg_type == "tool":
-        tool_name = getattr(msg, "name", "?")
-        content = getattr(msg, "content", "") or ""
-        size = len(content) if isinstance(content, str) else 0
-        added = 0
-        if tool_name in AI_SCAN_TOOL_NAMES and isinstance(content, str):
-            for f in _parse_ai_tool_findings(content):
-                f.setdefault("_branch", branch)
-                salvage_bucket.append(f)
-                added += 1
-        suffix = f", +{added} salvaged" if added else ""
-        emit(scan_id, "result", f"{tool_name} → {size}B{suffix}", branch=branch)
-    return tool_calls_so_far
 
 
 def _make_specialist_node(name: str, prompt: str, kickoff_msg: str):
@@ -355,16 +292,15 @@ def _make_specialist_node(name: str, prompt: str, kickoff_msg: str):
             ):
                 if isinstance(chunk, dict):
                     final_state = chunk
-                    for msg in chunk.get("messages", []) or []:
-                        msg_id = getattr(msg, "id", None)
-                        if msg_id and msg_id in seen_msg_ids:
-                            continue
-                        if msg_id:
-                            seen_msg_ids.add(msg_id)
-                        tool_calls = _emit_message(
-                            scan_id, name, msg, tool_calls, salvage_bucket
-                        )
-        except Exception as exc:  # noqa: BLE001
+                    tool_calls = iter_stream_events(
+                        chunk,
+                        seen_msg_ids,
+                        scan_id,
+                        branch=name,
+                        tool_calls_so_far=tool_calls,
+                        salvage_bucket=salvage_bucket,
+                    )
+        except Exception as exc:
             crashed_with = str(exc)[:200]
             emit(scan_id, "warn", f"{name} crashed: {crashed_with[:140]}", branch=name)
 
@@ -378,16 +314,7 @@ def _make_specialist_node(name: str, prompt: str, kickoff_msg: str):
                 tagged.append(d)
 
         if not tagged and salvage_bucket:
-            # Either the agent crashed mid-flight or never produced a
-            # structured response. The findings the AI tools already
-            # surfaced are still trustworthy — keep them.
-            seen_keys: set[tuple] = set()
-            for f in salvage_bucket:
-                key = (f.get("title", ""), f.get("location", ""))
-                if key in seen_keys:
-                    continue
-                seen_keys.add(key)
-                tagged.append(f)
+            tagged = collect_salvage(salvage_bucket, branch=name)
             emit(
                 scan_id, "info",
                 f"{name} salvaged {len(tagged)} finding(s) from intermediate tool calls",

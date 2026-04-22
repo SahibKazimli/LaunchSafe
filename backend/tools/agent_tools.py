@@ -17,6 +17,7 @@ from typing import Annotated, Any
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
+from core.config import MAX_BATCH_BYTES, MAX_FILES_PER_BATCH, MAX_FINDINGS_PER_TOOL
 from .scanners import (
     scan_api,
     scan_auth,
@@ -25,8 +26,6 @@ from .scanners import (
     scan_privacy,
     scan_secrets,
 )
-
-MAX_FINDINGS_PER_TOOL = 40
 
 
 def _format(findings: list[dict[str, Any]]) -> str:
@@ -115,8 +114,6 @@ def read_file(path: str, state: Annotated[dict, InjectedState]) -> str:
     return json.dumps({"path": path, "content": content})
 
 
-MAX_FILES_PER_BATCH = 10
-MAX_BATCH_BYTES = 120_000
 
 
 @tool
@@ -137,23 +134,23 @@ def read_files(paths: list[str], state: Annotated[dict, InjectedState]) -> str:
     skipped: list[str] = []
     total_bytes = 0
 
-    for p in paths[:MAX_FILES_PER_BATCH]:
-        content = repo.get(p)
+    for path in paths[:MAX_FILES_PER_BATCH]:
+        content = repo.get(path)
         if content is None:
-            skipped.append(p)
+            skipped.append(path)
             continue
         truncated = False
         if len(content) > 12_000:
             content = content[:12_000] + "\n...[truncated]"
             truncated = True
         if total_bytes + len(content) > MAX_BATCH_BYTES:
-            skipped.append(p)
+            skipped.append(path)
             continue
         total_bytes += len(content)
-        result_files.append({"path": p, "content": content, "truncated": truncated})
+        result_files.append({"path": path, "content": content, "truncated": truncated})
 
-    for p in paths[MAX_FILES_PER_BATCH:]:
-        skipped.append(p)
+    for path in paths[MAX_FILES_PER_BATCH:]:
+        skipped.append(path)
 
     return json.dumps({"files": result_files, "skipped": skipped})
 

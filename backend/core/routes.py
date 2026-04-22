@@ -1,0 +1,249 @@
+"""FastAPI route handlers for LaunchSafe.
+
+All HTTP endpoints live here.  ``main.py`` includes the router during
+app bootstrap via ``app.include_router(router)``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import tempfile
+import uuid
+
+from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from pathlib import Path
+
+from core.config import EVENT_API_TAIL
+from tools.ingest import clone_github, extract_zip
+from tools.scanners import compute_score, score_breakdown
+from core import scan_store as _ss
+
+_HERE = Path(__file__).resolve().parent          # backend/core/
+_BACKEND = _HERE.parent                          # backend/
+_FRONTEND = (_BACKEND.parent / "frontend").resolve()
+
+templates = Jinja2Templates(directory=str(_FRONTEND))
+
+router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Pages
+# ---------------------------------------------------------------------------
+
+@router.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    return templates.TemplateResponse(request, "index.html")
+
+
+@router.get("/scan/{scan_id}", response_class=HTMLResponse)
+async def scan_page(request: Request, scan_id: str):
+    if not _ss.exists(scan_id):
+        return HTMLResponse("Scan not found", status_code=404)
+    return templates.TemplateResponse(request, "scan.html", {"scan_id": scan_id})
+
+
+@router.get("/report/{scan_id}", response_class=HTMLResponse)
+async def report_page(request: Request, scan_id: str):
+    scan = _ss.get_scan(scan_id)
+    if not scan or scan["status"] != "done":
+        return HTMLResponse("Report not ready", status_code=404)
+
+    findings = scan["findings"]
+    counts = {
+        "critical": sum(1 for f in findings if f["severity"] == "critical"),
+        "high":     sum(1 for f in findings if f["severity"] == "high"),
+        "medium":   sum(1 for f in findings if f["severity"] == "medium"),
+        "low":      sum(1 for f in findings if f["severity"] == "low"),
+    }
+    breakdown = score_breakdown(findings)
+    enriched: list[dict] = []
+    for f, row in zip(findings, breakdown["rows"]):
+        ef = dict(f)
+        ef["_score"] = row
+        enriched.append(ef)
+    return templates.TemplateResponse(request, "report.html", {
+        "scan": scan,
+        "findings": enriched,
+        "counts": counts,
+        "total": len(findings),
+    })
+
+
+# ---------------------------------------------------------------------------
+# API
+# ---------------------------------------------------------------------------
+
+@router.post("/start-scan")
+async def start_scan(
+    file: UploadFile = File(None),
+    github_url: str = Form(""),
+):
+    from core.orchestrator import run_scan
+
+    scan_id = str(uuid.uuid4())[:8]
+    target = github_url.strip() or (file.filename if file else "uploaded file")
+    _ss.create_scan(scan_id, target)
+
+    files: dict[str, str] = {}
+    user_provided_input = bool(github_url.strip()) or bool(file and file.filename)
+
+    if github_url.strip():
+        try:
+            files = await asyncio.to_thread(clone_github, github_url.strip())
+        except Exception as exc:  # noqa: BLE001
+            _ss.update_scan(
+                scan_id,
+                status="error",
+                error=f"Failed to clone {github_url}: {exc!s}",
+            )
+            return {"scan_id": scan_id}
+
+    elif file and file.filename:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
+            tmp.write(await file.read())
+            tmp_path = tmp.name
+        files = extract_zip(tmp_path)
+        os.unlink(tmp_path)
+
+    if user_provided_input and not files:
+        _ss.update_scan(
+            scan_id,
+            status="error",
+            error=(
+                "Repo cloned but no scannable files found. Supported extensions "
+                "include .py .js .ts .go .rs .c .h .cpp .java .md .yaml .tf and "
+                "files like Makefile / Dockerfile / README. Check that the repo "
+                "is public and contains source code."
+            ),
+        )
+        return {"scan_id": scan_id}
+
+    if not files:
+        files = _demo_files()
+
+    asyncio.create_task(run_scan(scan_id, files))
+    return {"scan_id": scan_id}
+
+
+@router.get("/scan-status/{scan_id}")
+async def scan_status(scan_id: str, since: int = 0):
+    scan = _ss.get_scan(scan_id)
+    if not scan:
+        return {"error": "not found"}
+
+    profile = scan.get("repo_profile")
+    if hasattr(profile, "model_dump"):
+        profile = profile.model_dump()
+
+    all_events = scan.get("events", [])
+    new_events = [e for e in all_events if e.get("seq", 0) > since]
+    if len(new_events) > EVENT_API_TAIL:
+        new_events = new_events[-EVENT_API_TAIL:]
+    last_seq = scan.get("event_seq", 0)
+
+    return {
+        "status": scan["status"],
+        "target": scan.get("target", ""),
+        "modules_done": scan.get("modules_done", []),
+        "branches": scan.get("branches", {}),
+        "findings_count": len(scan.get("findings", [])),
+        "repo_profile": profile,
+        "summary": scan.get("summary", ""),
+        "overall_risk": scan.get("overall_risk", ""),
+        "events": new_events,
+        "last_seq": last_seq,
+        "error": scan.get("error"),
+    }
+
+
+@router.get("/api/findings/{scan_id}")
+async def get_findings(scan_id: str, severity: str = "all"):
+    scan = _ss.get_scan(scan_id)
+    if not scan:
+        return {"error": "not found"}
+    findings = scan.get("findings", [])
+    if severity != "all":
+        findings = [f for f in findings if f["severity"] == severity]
+    return {"findings": findings}
+
+
+# ---------------------------------------------------------------------------
+# Demo / fallback data
+# ---------------------------------------------------------------------------
+
+def _demo_files() -> dict[str, str]:
+    """Demo files with intentional vulnerabilities for demonstration."""
+    return {
+        "src/config/aws.js": """
+const AWS_ACCESS_KEY_ID = 'AKIAIOSFODNN7EXAMPLE';
+const AWS_SECRET_ACCESS_KEY = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY';
+module.exports = { AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY };
+""",
+        ".env.example": """
+STRIPE_SECRET_KEY=sk_live_51ABC123realkey
+DATABASE_URL=postgres://admin:password123@db.example.com/prod
+SECRET_KEY=short
+DEBUG=True
+""",
+        "middleware/auth.js": """
+const jwt = require('jsonwebtoken');
+function verify(token) {
+    return jwt.verify(token, process.env.SECRET_KEY); // no algorithm specified
+}
+function hashPassword(pw) {
+    return md5(pw); // insecure
+}
+""",
+        "routes/api.js": """
+const express = require('express');
+const app = express();
+const cors = require('cors');
+app.use(cors({ origin: '*' }));
+
+app.post('/login', (req, res) => {
+    const query = \"SELECT * FROM users WHERE email = '\" + req.body.email + \"'\";
+    db.execute(query);
+});
+app.get('/admin/users', (req, res) => {
+    // no auth middleware!
+    res.json(db.query('SELECT * FROM users'));
+});
+""",
+        "terraform/main.tf": """
+resource "aws_s3_bucket" "uploads" {
+  bucket = "my-startup-uploads"
+  acl    = "public-read"
+}
+resource "aws_db_instance" "main" {
+  publicly_accessible = true
+  password            = "mysupersecret123"
+}
+resource "aws_security_group_rule" "ssh" {
+  cidr_blocks = ["0.0.0.0/0"]
+  from_port   = 22
+}
+""",
+        "package.json": """
+{
+  "dependencies": {
+    "lodash": "4.17.20",
+    "jsonwebtoken": "8.5.0",
+    "express": "4.17.1",
+    "axios": "0.21.0"
+  }
+}
+""",
+        "models/user.py": """
+import hashlib
+class User:
+    def set_password(self, pw):
+        self.password_hash = hashlib.md5(pw.encode()).hexdigest()
+    def log_login(self, email):
+        print(f"Login attempt: {email}")  # PII in logs
+    ssn = models.CharField(max_length=11)  # PII field
+""",
+    }

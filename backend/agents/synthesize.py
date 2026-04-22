@@ -16,12 +16,12 @@ it is pure post-processing + a single LLM call.
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
+from core.config import SYNTH_MAX_TOKENS
 from .runtime_log import emit
 from .schemas import AuditReport, ComplianceRef, Finding
-from .tools.scanners import SEVERITY_DEFAULT_CVSS, infer_exposure_from_path
+from tools.scanners import SEVERITY_DEFAULT_CVSS, infer_exposure_from_path
 
 SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
@@ -29,21 +29,21 @@ SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 def _backfill_score_fields(raw: dict) -> dict:
     """Make sure every finding has cvss_base + exposure so compute_score
     has real numbers to work with even when the LLM omits them."""
-    sev = str(raw.get("severity") or "low").lower()
+    severity = str(raw.get("severity") or "low").lower()
     if not raw.get("exposure"):
         raw["exposure"] = infer_exposure_from_path(raw.get("location", ""))
-    cb = raw.get("cvss_base")
+    cvss_base = raw.get("cvss_base")
     try:
-        cb_f = float(cb)
-        if not (0.0 < cb_f <= 10.0):
+        cvss_base_f = float(cvss_base)
+        if not (0.0 < cvss_base_f <= 10.0):
             raise ValueError
     except (TypeError, ValueError):
-        raw["cvss_base"] = SEVERITY_DEFAULT_CVSS.get(sev, 0.0)
+        raw["cvss_base"] = SEVERITY_DEFAULT_CVSS.get(severity, 0.0)
     return raw
 
 
-def _sev_key(sev: str) -> int:
-    return SEVERITY_RANK.get((sev or "low").lower(), 4)
+def _sev_key(severity: str) -> int:
+    return SEVERITY_RANK.get((severity or "low").lower(), 4)
 
 
 def _normalize_loc(loc: str) -> str:
@@ -74,14 +74,14 @@ def _dedupe(findings: list[dict]) -> list[Finding]:
 
         merged_refs: list[dict] = []
         seen: set[str] = set()
-        for r in (raw.get("compliance") or []) + ((winner or {}).get("compliance") or []):
-            if not isinstance(r, dict):
+        for ref in (raw.get("compliance") or []) + ((winner or {}).get("compliance") or []):
+            if not isinstance(ref, dict):
                 continue
-            rid = r.get("id")
-            if not rid or rid in seen:
+            ref_id = ref.get("id")
+            if not ref_id or ref_id in seen:
                 continue
-            seen.add(rid)
-            merged_refs.append(r)
+            seen.add(ref_id)
+            merged_refs.append(ref)
         keep["compliance"] = merged_refs
 
         by_key[key] = keep
@@ -90,23 +90,23 @@ def _dedupe(findings: list[dict]) -> list[Finding]:
     for raw in by_key.values():
         raw.pop("_branch", None)
         refs: list[ComplianceRef] = []
-        for r in raw.get("compliance") or []:
-            if not isinstance(r, dict) or not r.get("id"):
+        for ref in raw.get("compliance") or []:
+            if not isinstance(ref, dict) or not ref.get("id"):
                 continue
             try:
-                refs.append(ComplianceRef.model_validate(r))
+                refs.append(ComplianceRef.model_validate(ref))
             except Exception:  
                 # Tolerate partial refs (e.g. id-only); the popover will
                 # still render the id even without a summary.
                 refs.append(ComplianceRef.model_construct(
-                    id=str(r.get("id")),
-                    summary=str(r.get("summary") or ""),
-                    url=r.get("url"),
+                    id=str(ref.get("id")),
+                    summary=str(ref.get("summary") or ""),
+                    url=ref.get("url"),
                 ))
 
         backfilled = _backfill_score_fields(raw)
         try:
-            f = Finding.model_validate({
+            finding = Finding.model_validate({
                 "severity": str(backfilled.get("severity", "low")).lower() or "low",
                 "module": backfilled.get("module") or "general",
                 "title": backfilled.get("title") or "(untitled)",
@@ -120,7 +120,7 @@ def _dedupe(findings: list[dict]) -> list[Finding]:
                 "cvss_base": float(backfilled.get("cvss_base") or 0.0),
                 "exposure": backfilled.get("exposure") or "production",
             })
-            out.append(f)
+            out.append(finding)
         except Exception:  
             continue
 
@@ -130,21 +130,21 @@ def _dedupe(findings: list[dict]) -> list[Finding]:
 
 def _branch_breakdown(findings: list[dict]) -> dict[str, int]:
     counts: dict[str, int] = {}
-    for f in findings:
-        if isinstance(f, dict):
-            b = f.get("_branch", "general")
-            counts[b] = counts.get(b, 0) + 1
+    for finding in findings:
+        if isinstance(finding, dict):
+            branch = finding.get("_branch", "general")
+            counts[branch] = counts.get(branch, 0) + 1
     return counts
 
 
 def _heuristic_risk(findings: list[Finding]) -> str:
-    sev = [f.severity.lower() for f in findings if f.is_true_positive]
-    if any(s == "critical" for s in sev): return "critical"
-    if sum(1 for s in sev if s == "high") >= 3: return "high"
-    if any(s == "high" for s in sev):  return "high"
-    if sum(1 for s in sev if s == "medium") >= 4: return "medium"
-    if any(s == "medium" for s in sev): return "medium"
-    if sev: return "low"
+    severities = [finding.severity.lower() for finding in findings if finding.is_true_positive]
+    if any(severity == "critical" for severity in severities): return "critical"
+    if sum(1 for severity in severities if severity == "high") >= 3: return "high"
+    if any(severity == "high" for severity in severities):  return "high"
+    if sum(1 for severity in severities if severity == "medium") >= 4: return "medium"
+    if any(severity == "medium" for severity in severities): return "medium"
+    if severities: return "low"
     return "minimal"
 
 
@@ -152,9 +152,9 @@ def _heuristic_summary(target: str, findings: list[Finding], branches: dict[str,
     if not findings:
         return f"No exploitable issues found in {target} across {sum(branches.values()) or 0} specialist passes."
     counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
-    for f in findings:
-        counts[f.severity.lower()] = counts.get(f.severity.lower(), 0) + 1
-    parts = [f"{n} {sev}" for sev, n in counts.items() if n]
+    for finding in findings:
+        counts[finding.severity.lower()] = counts.get(finding.severity.lower(), 0) + 1
+    parts = [f"{count} {severity}" for severity, count in counts.items() if count]
     branch_list = ", ".join(sorted(branches.keys())) or "general"
     return (
         f"Audit of {target} surfaced {len(findings)} issue(s) "
@@ -164,12 +164,12 @@ def _heuristic_summary(target: str, findings: list[Finding], branches: dict[str,
 
 def _heuristic_top_fixes(findings: list[Finding]) -> list[str]:
     out: list[str] = []
-    for f in findings:
-        if not f.is_true_positive:
+    for finding in findings:
+        if not finding.is_true_positive:
             continue
-        if f.severity.lower() not in ("critical", "high"):
+        if finding.severity.lower() not in ("critical", "high"):
             continue
-        out.append(f.fix.strip() or f.title)
+        out.append(finding.fix.strip() or finding.title)
         if len(out) >= 5:
             break
     return out
@@ -177,7 +177,6 @@ def _heuristic_top_fixes(findings: list[Finding]) -> list[str]:
 
 
 # LLM-assisted summary 
-
 
 def _llm_summary(target: str, findings: list[Finding], branches: dict[str, int]):
     """Ask Claude for a clean exec summary + top fixes + overall risk.
@@ -192,15 +191,15 @@ def _llm_summary(target: str, findings: list[Finding], branches: dict[str, int])
         )
 
     try:
-        from langchain_anthropic import ChatAnthropic
-    except Exception:  
+        from agents.llm import get_llm
+    except Exception:
         return None
 
     rendered = []
-    for f in findings[:30]:
+    for finding in findings[:30]:
         rendered.append(
-            f"- [{f.severity}] {f.title} @ {f.location} (priority {f.priority})\n"
-            f"  fix: {f.fix.strip()[:200]}"
+            f"- [{finding.severity}] {finding.title} @ {finding.location} (priority {finding.priority})\n"
+            f"  fix: {finding.fix.strip()[:200]}"
         )
     body = "\n".join(rendered)
 
@@ -229,8 +228,7 @@ def _llm_summary(target: str, findings: list[Finding], branches: dict[str, int])
     )
 
     try:
-        model_name = os.environ.get("LAUNCHSAFE_LLM_MODEL", "claude-sonnet-4-5")
-        llm = ChatAnthropic(model=model_name, max_tokens=2048, temperature=0)
+        llm = get_llm(max_tokens=SYNTH_MAX_TOKENS)
         structured = llm.with_structured_output(AuditReport)
         result: AuditReport = structured.invoke(
             [{"role": "system", "content": system},
@@ -241,9 +239,8 @@ def _llm_summary(target: str, findings: list[Finding], branches: dict[str, int])
             result.top_fixes or _heuristic_top_fixes(findings),
             result.overall_risk or _heuristic_risk(findings),
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
-
 
 
 # Public node

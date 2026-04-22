@@ -37,6 +37,23 @@ def _env_float(key: str, default: float) -> float:
         return default
 
 
+def spec_react_recursion_limit() -> int:
+    """LangGraph `recursion_limit` is graph super-steps, not tool-call count.
+
+    `create_react_agent` does multiple internal steps per tool round (model,
+    tool execution, possible structured output). Tuning
+    `LAUNCHSAFE_SPEC_RECURSION_LIMIT` down to save cost often breaks this
+    relation and triggers "Recursion limit ... without hitting a stop
+    condition" while the model still has tools left. To save credits, lower
+    `LAUNCHSAFE_SPEC_MAX_TOOL_CALLS` instead; this function still ensures
+    the graph can finish after that many *invocation* rounds.
+    """
+    per_tool = 3
+    return max(
+        SPEC_RECURSION_LIMIT,
+        per_tool * max(SPEC_MAX_TOOL_CALLS, 1) + 18,
+    )
+
 
 # LLM / agent knobs
 
@@ -45,6 +62,8 @@ LLM_MODEL: str             = _env_str("LLM_MODEL", "gemini-3.1-pro-preview")
 
 SPEC_RECURSION_LIMIT: int   = _env_int("SPEC_RECURSION_LIMIT", 20)
 SPEC_MAX_TOKENS: int        = _env_int("SPEC_MAX_TOKENS", 2048)
+# Primary credit knob: agents are instructed to use at most this many tool
+# invocations; see spec_react_recursion_limit() for LangGraph *step* count.
 SPEC_MAX_TOOL_CALLS: int    = _env_int("SPEC_MAX_TOOL_CALLS", 15)
 
 RECON_MAX_TOKENS: int       = _env_int("RECON_MAX_TOKENS", 1024)

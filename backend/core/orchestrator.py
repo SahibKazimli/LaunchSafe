@@ -42,6 +42,9 @@ async def run_scan(scan_id: str, files: dict[str, str]) -> None:
 
     emit(scan_id, "info", f"Starting scan of {len(files)} files", branch="outer")
 
+    # Stash files so the fix agent can access them later
+    _ss.update_scan(scan_id, _files=files)
+
     if not os.environ.get("GEMINI_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
         emit(scan_id, "warn", "No GEMINI_API_KEY or ANTHROPIC_API_KEY — regex-only fallback", branch="outer")
         await _run_regex_fallback(scan_id, files)
@@ -86,9 +89,9 @@ async def run_scan(scan_id: str, files: dict[str, str]) -> None:
 
         # Salvage branch findings if synthesize produced nothing
         salvaged = [
-            f
-            for f in (final_state or {}).get("branch_findings", []) or []
-            if isinstance(f, dict) and "_error" not in f
+            finding
+            for finding in (final_state or {}).get("branch_findings", []) or []
+            if isinstance(finding, dict) and "_error" not in finding
         ]
         if not report_findings and salvaged:
             emit(
@@ -117,13 +120,13 @@ async def run_scan(scan_id: str, files: dict[str, str]) -> None:
             overall_risk=overall_risk or ("high" if grade in ("D", "F") else "medium"),
         )
 
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         salvaged: list[dict] = []
         try:
             salvaged = [
-                f
-                for f in (final_state or {}).get("branch_findings", []) or []
-                if isinstance(f, dict) and "_error" not in f
+                finding 
+                for finding in (final_state or {}).get("branch_findings", []) or []
+                if isinstance(finding, dict) and "_error" not in finding
             ]
         except Exception:
             pass

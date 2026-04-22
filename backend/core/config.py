@@ -60,15 +60,15 @@ def spec_react_recursion_limit() -> int:
 
 LLM_MODEL: str             = _env_str("LLM_MODEL", "gemini-3.1-pro-preview")
 
-SPEC_RECURSION_LIMIT: int   = _env_int("SPEC_RECURSION_LIMIT", 20)
-SPEC_MAX_TOKENS: int        = _env_int("SPEC_MAX_TOKENS", 2048)
+SPEC_RECURSION_LIMIT: int   = _env_int("SPEC_RECURSION_LIMIT", 30)
+SPEC_MAX_TOKENS: int        = _env_int("SPEC_MAX_TOKENS", 4096)
 # Primary credit knob: agents are instructed to use at most this many tool
 # invocations; see spec_react_recursion_limit() for LangGraph *step* count.
-SPEC_MAX_TOOL_CALLS: int    = _env_int("SPEC_MAX_TOOL_CALLS", 15)
+SPEC_MAX_TOOL_CALLS: int    = _env_int("SPEC_MAX_TOOL_CALLS", 20)
 
-RECON_MAX_TOKENS: int       = _env_int("RECON_MAX_TOKENS", 1024)
-SYNTH_MAX_TOKENS: int       = _env_int("SYNTH_MAX_TOKENS", 1024)
-AI_SCAN_MAX_TOKENS: int     = _env_int("AI_SCAN_MAX_TOKENS", 1536)
+RECON_MAX_TOKENS: int       = _env_int("RECON_MAX_TOKENS", 2048)
+SYNTH_MAX_TOKENS: int       = _env_int("SYNTH_MAX_TOKENS", 2048)
+AI_SCAN_MAX_TOKENS: int     = _env_int("AI_SCAN_MAX_TOKENS", 2048)
 
 
 

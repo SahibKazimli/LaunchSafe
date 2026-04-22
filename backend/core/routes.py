@@ -102,10 +102,7 @@ def _normalize_compliance_tags(raw_tags: list) -> list:
     return out
 
 
-# ---------------------------------------------------------------------------
 # Pages
-# ---------------------------------------------------------------------------
-
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse(request, "index.html")
@@ -126,15 +123,15 @@ async def report_page(request: Request, scan_id: str):
 
     findings = scan["findings"]
     counts = {
-        "critical": sum(1 for f in findings if f["severity"] == "critical"),
-        "high":     sum(1 for f in findings if f["severity"] == "high"),
-        "medium":   sum(1 for f in findings if f["severity"] == "medium"),
-        "low":      sum(1 for f in findings if f["severity"] == "low"),
+        "critical": sum(1 for finding in findings if finding["severity"] == "critical"),
+        "high":     sum(1 for finding in findings if finding["severity"] == "high"),
+        "medium":   sum(1 for finding in findings if finding["severity"] == "medium"),
+        "low":      sum(1 for finding in findings if finding["severity"] == "low"),
     }
     breakdown = score_breakdown(findings)
     enriched: list[dict] = []
-    for f, row in zip(findings, breakdown["rows"]):
-        ef = dict(f)
+    for finding, row in zip(findings, breakdown["rows"]):
+        ef = dict(finding)
         ef["_score"] = row
         ef["compliance"] = _normalize_compliance_tags(ef.get("compliance", []))
         enriched.append(ef)
@@ -147,9 +144,8 @@ async def report_page(request: Request, scan_id: str):
     })
 
 
-# ---------------------------------------------------------------------------
+
 # API
-# ---------------------------------------------------------------------------
 
 @router.post("/start-scan")
 async def start_scan(github_url: str = Form("")):

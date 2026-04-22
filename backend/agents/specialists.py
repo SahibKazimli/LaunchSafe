@@ -43,8 +43,10 @@ from .state import ScanAgentState
 from .stream import collect_salvage, iter_stream_events
 from tools.agent_tools import ALL_TOOLS as REGEX_TOOLS
 from tools.ai_tools import AI_TOOLS
+from tools.budget import scan_budget_guard
+from tools.hotspot import select_hotspots
 
-ALL_AGENT_TOOLS = REGEX_TOOLS + AI_TOOLS
+ALL_AGENT_TOOLS = REGEX_TOOLS + AI_TOOLS + [scan_budget_guard, select_hotspots]
 
 
 class _BranchFindings(BaseModel):
@@ -69,12 +71,15 @@ _COMMON_TAIL = f"""\
 {COMPLIANCE_INSTRUCTIONS}
 
 Workflow:
-  1. Re-read the RepoProfile in the first user message; pay attention
-     to `hotspot_files`.
+  1. Call `select_hotspots` with your lane name to get a pre-sorted list
+     of the most relevant files for your specialist area.
   2. Run the regex triage tools relevant to your lane (cheap, free).
   3. For each in-scope hotspot, call `ai_scan_file` with the focus that
      fits your lane. Use `read_file` only for adaptive follow-ups.
-  4. Return a `_BranchFindings` object. Keep findings to your lane —
+  4. Call `scan_budget_guard` periodically (every 3-4 tool calls) to
+     check your remaining budget. When it says `should_stop: true`,
+     you MUST return immediately.
+  5. Return a `_BranchFindings` object. Keep findings to your lane —
      overlap is OK if you have stronger evidence than another specialist
      would, but do NOT pad the list.
 
@@ -88,12 +93,12 @@ Hard rules:
 
 Step budget (mandatory):
   - You may use at most {SPEC_MAX_TOOL_CALLS} tool invocations in total
-    (all tools count: list/read/regex/ai_scan_*). Plan triage in few calls,
-    then spend the rest on the highest-signal paths only.
-  - When you are at or one step from that cap, you MUST return
-    `_BranchFindings` on your next model turn with **no further tools** —
-    partial results are always better than stalling. Say what is unchecked
-    in `notes` if you had to cut short.
+    (all tools count: list/read/regex/ai_scan_*/budget/hotspots). Plan
+    triage in few calls, then spend the rest on the highest-signal paths.
+  - Use `scan_budget_guard` to check your remaining budget. When it
+    returns `should_stop: true`, return `_BranchFindings` immediately
+    with **no further tools** — partial results are always better than
+    stalling. Say what is unchecked in `notes` if you had to cut short.
 """
 
 

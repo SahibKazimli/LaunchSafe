@@ -335,10 +335,11 @@
       lastSeq = Math.max(lastSeq, data.last_seq);
     }
 
-    if (data.error) {
+    if (data.error || data.status === 'error') {
       const banner = document.getElementById('error-banner');
       banner.style.display = 'block';
-      banner.textContent = 'Scan error: ' + data.error;
+      const msg = data.error || 'The scan ended with an error.';
+      banner.textContent = 'Scan error: ' + msg;
       document.getElementById('working').style.display = 'none';
       clearInterval(pollInterval);
       clearInterval(tickInterval);

@@ -47,6 +47,13 @@
 
   .scan-btn-full { width: 100%; margin-top: 20px; padding: 14px; font-size: 15px; border-radius: 12px; text-align: center; }
 
+  #scan-form-error {
+    display: none; margin-top: 12px; padding: 12px 14px; border-radius: 10px;
+    font-family: var(--sans); font-size: 13px; color: #ffb4b4;
+    background: rgba(255, 77, 77, 0.12); border: 1px solid rgba(255, 77, 77, 0.25);
+    text-align: left;
+  }
+
   .trust-row { display: flex; gap: 24px; justify-content: center; margin-top: 32px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
   .trust-row span { display: flex; align-items: center; gap: 6px; }
   .trust-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
@@ -65,7 +72,7 @@
   <div class="hero fadein">
     <div class="hero-eyebrow">Security Audit Platform</div>
     <h1>More than a scan.<br><span class="green-text">A full-stack security audit.</span></h1>
-    <p class="hero-sub">Upload your codebase or paste a GitHub URL. Get a deep, context-aware analysis across code, infrastructure, auth logic, dependencies, and data handling to uncover risks shallow scanners miss.</p>
+    <p class="hero-sub">Paste a public GitHub repository URL. Get a deep, context-aware analysis across code, infrastructure, auth logic, dependencies, and data handling to uncover risks shallow scanners miss.</p>
     <p class="hero-sub-green">Every finding is aligned with globally recognized security standards like OWASP and CVSS.</p>
 
     <div class="modules-preview">
@@ -77,11 +84,14 @@
       <div class="mod-chip"><strong>Dependencies</strong>CVEs, known vulns</div>
     </div>
 
-    <form id="scan-form" method="POST" action="/start-scan" enctype="multipart/form-data">
+    <form id="scan-form" method="POST" action="/start-scan">
 
       <div class="github-input-row">
-        <input type="text" name="github_url" id="github-url" placeholder="https://github.com/your-org/your-repo" />
+        <input type="text" name="github_url" id="github-url" autocomplete="off"
+          placeholder="https://github.com/your-org/your-repo" />
       </div>
+
+      <div id="scan-form-error" role="alert"></div>
 
       <button type="submit" class="btn-primary scan-btn-full">Run full security audit</button>
     </form>
@@ -93,14 +103,50 @@
 <script>
   document.getElementById('scan-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const btn = e.target.querySelector('[type=submit]');
+    const form = e.target;
+    const btn = form.querySelector('[type=submit]');
+    const errEl = document.getElementById('scan-form-error');
+    const urlInput = document.getElementById('github-url');
+    errEl.style.display = 'none';
+    errEl.textContent = '';
+
+    const url = (urlInput.value || '').trim();
+    if (!url) {
+      errEl.textContent = 'Paste a public GitHub repository URL to start a scan.';
+      errEl.style.display = 'block';
+      urlInput.focus();
+      return;
+    }
+
+    const label = btn.textContent;
     btn.textContent = 'Starting scan…';
     btn.disabled = true;
 
-    const formData = new FormData(e.target);
-    const res = await fetch('/start-scan', { method: 'POST', body: formData });
-    const { scan_id } = await res.json();
-    window.location.href = '/scan/' + scan_id;
+    const formData = new FormData(form);
+    try {
+      const res = await fetch('/start-scan', { method: 'POST', body: formData });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        errEl.textContent = data.error || 'Could not start the scan. Try again.';
+        errEl.style.display = 'block';
+        btn.textContent = label;
+        btn.disabled = false;
+        return;
+      }
+      if (!data.scan_id) {
+        errEl.textContent = 'No scan id returned. Please try again.';
+        errEl.style.display = 'block';
+        btn.textContent = label;
+        btn.disabled = false;
+        return;
+      }
+      window.location.href = '/scan/' + data.scan_id;
+    } catch {
+      errEl.textContent = 'Network error. Check your connection and try again.';
+      errEl.style.display = 'block';
+      btn.textContent = label;
+      btn.disabled = false;
+    }
   });
 </script>
 {% endblock %}

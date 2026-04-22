@@ -50,6 +50,42 @@ def _normalize_loc(loc: str) -> str:
     return (loc or "").strip().lower().split(":", 1)[0]
 
 
+def _merge_compliance_ref_dicts(*lists: list) -> list[dict]:
+    """Union compliance refs by `id`, preserving first-seen order.
+
+    When the same control id appears from multiple branches, the first dict
+    wins for ordering, but we merge fields so a later copy can **fill in**
+    a missing ``url`` or a longer ``summary`` (dedupe used to drop later
+    copies entirely, which stripped SOC2 / OWASP links).
+    """
+    merged_by_id: dict[str, dict] = {}
+    order: list[str] = []
+    for lst in lists:
+        for ref in lst or []:
+            if not isinstance(ref, dict):
+                continue
+            rid = str(ref.get("id") or "").strip()
+            if not rid:
+                continue
+            if rid not in merged_by_id:
+                merged_by_id[rid] = {
+                    "id": rid,
+                    "summary": str(ref.get("summary") or "").strip(),
+                    "url": ref.get("url"),
+                }
+                order.append(rid)
+                continue
+            prev = merged_by_id[rid]
+            nu, pu = ref.get("url"), prev.get("url")
+            if nu and not pu:
+                prev["url"] = nu
+            ns = str(ref.get("summary") or "").strip()
+            ps = str(prev.get("summary") or "").strip()
+            if len(ns) > len(ps):
+                prev["summary"] = ns
+    return [merged_by_id[rid] for rid in order]
+
+
 def _dedupe(findings: list[dict]) -> list[Finding]:
     """Group by (lowercased title, file path). Keep the most severe copy
     and union its compliance refs."""
@@ -72,17 +108,10 @@ def _dedupe(findings: list[dict]) -> list[Finding]:
         else:
             keep = dict(winner)
 
-        merged_refs: list[dict] = []
-        seen: set[str] = set()
-        for ref in (raw.get("compliance") or []) + ((winner or {}).get("compliance") or []):
-            if not isinstance(ref, dict):
-                continue
-            ref_id = ref.get("id")
-            if not ref_id or ref_id in seen:
-                continue
-            seen.add(ref_id)
-            merged_refs.append(ref)
-        keep["compliance"] = merged_refs
+        keep["compliance"] = _merge_compliance_ref_dicts(
+            raw.get("compliance") or [],
+            (winner or {}).get("compliance") or [],
+        )
 
         by_key[key] = keep
 

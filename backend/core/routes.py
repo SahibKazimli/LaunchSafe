@@ -7,19 +7,17 @@ app bootstrap via ``app.include_router(router)``.
 from __future__ import annotations
 
 import asyncio
-import os
-import tempfile
 import uuid
 import re
 
-from fastapi import APIRouter, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Form, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
 from core.config import EVENT_API_TAIL
 from tools.ingest import clone_github
-from tools.scanners import compute_score, score_breakdown
+from tools.scanners import score_breakdown
 from core import scan_store as _ss
 
 _HERE = Path(__file__).resolve().parent          # backend/core/
@@ -74,19 +72,23 @@ def _normalize_compliance_tags(raw_tags: list) -> list:
             tid = str(tag.get("id") or "").strip()
             if not tid:
                 continue
+            raw_u = tag.get("url") or tag.get("link")
+            u = str(raw_u).strip() if raw_u else ""
             out.append({
                 "id": tid,
                 "summary": str(tag.get("summary") or "").strip(),
-                "url": tag.get("url") or _fallback_compliance_url(tid),
+                "url": u or _fallback_compliance_url(tid),
             })
         elif hasattr(tag, "id"):
             tid = str(getattr(tag, "id", "") or "").strip()
             if not tid:
                 continue
+            raw_u = getattr(tag, "url", None) or getattr(tag, "link", None)
+            u = str(raw_u).strip() if raw_u else ""
             out.append({
                 "id": tid,
                 "summary": str(getattr(tag, "summary", "") or "").strip(),
-                "url": getattr(tag, "url", None) or _fallback_compliance_url(tid),
+                "url": u or _fallback_compliance_url(tid),
             })
         elif isinstance(tag, str):
             tid = tag.strip()
@@ -150,51 +152,39 @@ async def report_page(request: Request, scan_id: str):
 # ---------------------------------------------------------------------------
 
 @router.post("/start-scan")
-async def start_scan(
-    file: UploadFile = File(None),
-    github_url: str = Form(""),
-):
+async def start_scan(github_url: str = Form("")):
     from core.orchestrator import run_scan
 
+    url = (github_url or "").strip()
+    if not url:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "Paste a public GitHub repository URL to start a scan.",
+            },
+        )
+
     scan_id = str(uuid.uuid4())[:8]
-    target = github_url.strip() or (file.filename if file else "uploaded file")
-    _ss.create_scan(scan_id, target)
+    _ss.create_scan(scan_id, url)
 
     files: dict[str, str] = {}
-    user_provided_input = bool(github_url.strip()) or bool(file and file.filename)
+    try:
+        files = await asyncio.to_thread(clone_github, url)
+    except Exception as exc:
+        _ss.update_scan(
+            scan_id,
+            status="error",
+            error=f"Failed to clone {url}: {exc!s}",
+        )
+        return {"scan_id": scan_id}
 
-    # GitHub flow
-    if github_url.strip():
-        try:
-            files = await asyncio.to_thread(clone_github, github_url.strip())
-        except Exception as exc:
-            _ss.update_scan(
-                scan_id,
-                status="error",
-                error=f"Failed to clone {github_url}: {exc!s}",
-            )
-            return {"scan_id": scan_id}
-
-    # ZIP upload flow (YOU DID NOT REMOVE THIS BEFORE)
-    elif file and file.filename:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
-            tmp.write(await file.read())
-            tmp_path = tmp.name
-
-        files = extract_zip(tmp_path)
-        os.unlink(tmp_path)
-
-    # fallback handling
-    if user_provided_input and not files:
+    if not files:
         _ss.update_scan(
             scan_id,
             status="error",
             error="Repo cloned but no scannable files found.",
         )
         return {"scan_id": scan_id}
-
-    if not files:
-        files = _demo_files()
 
     asyncio.create_task(run_scan(scan_id, files))
     return {"scan_id": scan_id}
@@ -238,82 +228,9 @@ async def get_findings(scan_id: str, severity: str = "all"):
     findings = scan.get("findings", [])
     if severity != "all":
         findings = [f for f in findings if f["severity"] == severity]
-    return {"findings": findings}
-
-
-# ---------------------------------------------------------------------------
-# Demo / fallback data
-# ---------------------------------------------------------------------------
-
-def _demo_files() -> dict[str, str]:
-    """Demo files with intentional vulnerabilities for demonstration."""
-    return {
-        "src/config/aws.js": """
-const AWS_ACCESS_KEY_ID = 'AKIAIOSFODNN7EXAMPLE';
-const AWS_SECRET_ACCESS_KEY = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY';
-module.exports = { AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY };
-""",
-        ".env.example": """
-STRIPE_SECRET_KEY=sk_live_51ABC123realkey
-DATABASE_URL=postgres://admin:password123@db.example.com/prod
-SECRET_KEY=short
-DEBUG=True
-""",
-        "middleware/auth.js": """
-const jwt = require('jsonwebtoken');
-function verify(token) {
-    return jwt.verify(token, process.env.SECRET_KEY); // no algorithm specified
-}
-function hashPassword(pw) {
-    return md5(pw); // insecure
-}
-""",
-        "routes/api.js": """
-const express = require('express');
-const app = express();
-const cors = require('cors');
-app.use(cors({ origin: '*' }));
-
-app.post('/login', (req, res) => {
-    const query = \"SELECT * FROM users WHERE email = '\" + req.body.email + \"'\";
-    db.execute(query);
-});
-app.get('/admin/users', (req, res) => {
-    // no auth middleware!
-    res.json(db.query('SELECT * FROM users'));
-});
-""",
-        "terraform/main.tf": """
-resource "aws_s3_bucket" "uploads" {
-  bucket = "my-startup-uploads"
-  acl    = "public-read"
-}
-resource "aws_db_instance" "main" {
-  publicly_accessible = true
-  password            = "mysupersecret123"
-}
-resource "aws_security_group_rule" "ssh" {
-  cidr_blocks = ["0.0.0.0/0"]
-  from_port   = 22
-}
-""",
-        "package.json": """
-{
-  "dependencies": {
-    "lodash": "4.17.20",
-    "jsonwebtoken": "8.5.0",
-    "express": "4.17.1",
-    "axios": "0.21.0"
-  }
-}
-""",
-        "models/user.py": """
-import hashlib
-class User:
-    def set_password(self, pw):
-        self.password_hash = hashlib.md5(pw.encode()).hexdigest()
-    def log_login(self, email):
-        print(f"Login attempt: {email}")  # PII in logs
-    ssn = models.CharField(max_length=11)  # PII field
-""",
-    }
+    out: list[dict] = []
+    for f in findings:
+        row = dict(f)
+        row["compliance"] = _normalize_compliance_tags(row.get("compliance", []))
+        out.append(row)
+    return {"findings": out}

@@ -43,7 +43,7 @@ async def run_scan(scan_id: str, files: dict[str, str]) -> None:
     emit(scan_id, "info", f"Starting scan of {len(files)} files", branch="outer")
 
     if not os.environ.get("GEMINI_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
-        emit(scan_id, "warn", "No ANTHROPIC_API_KEY — regex-only fallback", branch="outer")
+        emit(scan_id, "warn", "No GEMINI_API_KEY or ANTHROPIC_API_KEY — regex-only fallback", branch="outer")
         await _run_regex_fallback(scan_id, files)
         return
 
@@ -190,7 +190,7 @@ async def _run_regex_fallback(scan_id: str, files: dict[str, str]) -> None:
         grade=grade,
         findings=all_findings,
         summary=(
-            "Regex-only fallback scan (no ANTHROPIC_API_KEY set). "
+            "Regex-only fallback scan (no LLM API key configured). "
             f"Found {len(all_findings)} issues across 6 modules."
         ),
         top_fixes=[],

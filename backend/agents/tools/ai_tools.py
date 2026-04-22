@@ -13,7 +13,6 @@ positives into the final `AuditReport`.
 from __future__ import annotations
 
 import json
-import os
 from typing import Annotated
 
 from langchain_core.tools import tool
@@ -26,10 +25,13 @@ from ..schemas import (
     SEVERITY_RUBRIC,
     Finding,
 )
-
-MAX_FILE_BYTES = 20_000
-MAX_CICD_BUNDLE_BYTES = 40_000
-MAX_AUTH_BUNDLE_BYTES = 40_000
+from ..config import (
+    AI_SCAN_MAX_TOKENS,
+    LLM_MODEL,
+    MAX_AUTH_BUNDLE_BYTES,
+    MAX_CICD_BUNDLE_BYTES,
+    MAX_FILE_BYTES,
+)
 
 
 class _FileFindings(BaseModel):
@@ -84,8 +86,7 @@ FOCUS_INSTRUCTIONS = {
 def _get_llm():
     from langchain_anthropic import ChatAnthropic
 
-    model = os.environ.get("LAUNCHSAFE_LLM_MODEL", "claude-sonnet-4-5")
-    return ChatAnthropic(model=model, max_tokens=3072, temperature=0)
+    return ChatAnthropic(model=LLM_MODEL, max_tokens=AI_SCAN_MAX_TOKENS, temperature=0)
 
 
 def _truncate(content: str, limit: int) -> str:
@@ -162,21 +163,21 @@ def ai_scan_cicd(state: Annotated[dict, InjectedState]) -> str:
     """
     files = state.get("files", {})
     cicd_files = {}
-    for p, c in files.items():
+    for path, content in files.items():
         if (
-            p.startswith(".github/workflows/")
-            or p == "Dockerfile"
-            or p.endswith("/Dockerfile")
-            or p.rsplit("/", 1)[-1] in ("docker-compose.yml", "docker-compose.yaml")
+            path.startswith(".github/workflows/")
+            or path == "Dockerfile"
+            or path.endswith("/Dockerfile")
+            or path.rsplit("/", 1)[-1] in ("docker-compose.yml", "docker-compose.yaml")
         ):
-            cicd_files[p] = c
+            cicd_files[path] = content
     if not cicd_files:
         return _empty("No CI/CD configuration files found.")
 
     bundle_parts: list[str] = []
     used = 0
-    for p, c in cicd_files.items():
-        section = f"### {p}\n```\n{_truncate(c, 8000)}\n```"
+    for path, content in cicd_files.items():
+        section = f"### {path}\n```\n{_truncate(content, 8000)}\n```"
         if used + len(section) > MAX_CICD_BUNDLE_BYTES:
             break
         bundle_parts.append(section)
@@ -229,16 +230,16 @@ def ai_audit_auth_flow(state: Annotated[dict, InjectedState]) -> str:
     keywords = ("auth", "login", "logout", "session", "jwt", "oauth",
                 "password", "token", "middleware", "identity", "account")
     auth_files = {
-        p: c for p, c in files.items()
-        if any(kw in p.lower() for kw in keywords)
+        path: content for path, content in files.items()
+        if any(kw in path.lower() for kw in keywords)
     }
     if not auth_files:
         return _empty("No auth-related files identified by path.")
 
     bundle_parts: list[str] = []
     used = 0
-    for p, c in auth_files.items():
-        section = f"### {p}\n```\n{_truncate(c, 6000)}\n```"
+    for path, content in auth_files.items():
+        section = f"### {path}\n```\n{_truncate(content, 6000)}\n```"
         if used + len(section) > MAX_AUTH_BUNDLE_BYTES:
             break
         bundle_parts.append(section)
@@ -279,7 +280,7 @@ def ai_audit_auth_flow(state: Annotated[dict, InjectedState]) -> str:
              {"role": "user", "content": bundle}]
         )
         return result.model_dump_json()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return _empty(f"ai_audit_auth_flow failed: {exc!s}")
 
 

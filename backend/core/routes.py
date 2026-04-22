@@ -100,10 +100,7 @@ def _normalize_compliance_tags(raw_tags: list) -> list:
     return out
 
 
-# ---------------------------------------------------------------------------
 # Pages
-# ---------------------------------------------------------------------------
-
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse(request, "index.html")
@@ -124,15 +121,15 @@ async def report_page(request: Request, scan_id: str):
 
     findings = scan["findings"]
     counts = {
-        "critical": sum(1 for f in findings if f["severity"] == "critical"),
-        "high":     sum(1 for f in findings if f["severity"] == "high"),
-        "medium":   sum(1 for f in findings if f["severity"] == "medium"),
-        "low":      sum(1 for f in findings if f["severity"] == "low"),
+        "critical": sum(1 for finding in findings if finding["severity"] == "critical"),
+        "high":     sum(1 for finding in findings if finding["severity"] == "high"),
+        "medium":   sum(1 for finding in findings if finding["severity"] == "medium"),
+        "low":      sum(1 for finding in findings if finding["severity"] == "low"),
     }
     breakdown = score_breakdown(findings)
     enriched: list[dict] = []
-    for f, row in zip(findings, breakdown["rows"]):
-        ef = dict(f)
+    for finding, row in zip(findings, breakdown["rows"]):
+        ef = dict(finding)
         ef["_score"] = row
         ef["compliance"] = _normalize_compliance_tags(ef.get("compliance", []))
         enriched.append(ef)
@@ -145,9 +142,8 @@ async def report_page(request: Request, scan_id: str):
     })
 
 
-# ---------------------------------------------------------------------------
+
 # API
-# ---------------------------------------------------------------------------
 
 @router.post("/start-scan")
 async def start_scan(
@@ -241,9 +237,77 @@ async def get_findings(scan_id: str, severity: str = "all"):
     return {"findings": findings}
 
 
-# ---------------------------------------------------------------------------
+
+# Fix Session API
+
+
+from pydantic import BaseModel as _PydanticBase
+from core import fix_store as _fs
+
+
+class _StartFixRequest(_PydanticBase):
+    scan_id: str
+    finding_indices: list[int] = []
+
+
+@router.post("/start-fix")
+async def start_fix(req: _StartFixRequest):
+    from core.fix_orchestrator import run_fix_session
+
+    if not _ss.exists(req.scan_id):
+        return {"error": "scan not found"}
+
+    fix_id = str(uuid.uuid4())[:8]
+    _fs.create_fix_session(fix_id, req.scan_id, req.finding_indices)
+
+    asyncio.create_task(run_fix_session(fix_id, req.scan_id, req.finding_indices))
+    return {"fix_id": fix_id}
+
+
+@router.get("/fix-status/{fix_id}")
+async def fix_status(fix_id: str):
+    session = _fs.get_fix_session(fix_id)
+    if not session:
+        return {"error": "not found"}
+
+    return {
+        "status": session["status"],
+        "scan_id": session.get("scan_id", ""),
+        "fix_plan": session.get("fix_plan"),
+        "patches": session.get("patches", []),
+        "review": session.get("review"),
+        "error": session.get("error"),
+        "events": session.get("events", [])[-50:],
+    }
+
+
+@router.get("/fix-patches/{fix_id}")
+async def fix_patches(fix_id: str):
+    session = _fs.get_fix_session(fix_id)
+    if not session:
+        return {"error": "not found"}
+    return {
+        "patches": session.get("patches", []),
+        "review": session.get("review"),
+        "fix_plan": session.get("fix_plan"),
+    }
+
+
+@router.get("/fix/{fix_id}", response_class=HTMLResponse)
+async def fix_page(request: Request, fix_id: str):
+    if not _fs.exists(fix_id):
+        return HTMLResponse("Fix session not found", status_code=404)
+    session = _fs.get_fix_session(fix_id)
+    scan_id = session.get("scan_id", "") if session else ""
+    return templates.TemplateResponse(request, "fix.html", {
+        "fix_id": fix_id,
+        "scan_id": scan_id,
+    })
+
+
+
 # Demo / fallback data
-# ---------------------------------------------------------------------------
+
 
 def _demo_files() -> dict[str, str]:
     """Demo files with intentional vulnerabilities for demonstration."""

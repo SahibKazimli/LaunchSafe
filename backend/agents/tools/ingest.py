@@ -6,9 +6,8 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+from ..config import MAX_INGEST_FILE_BYTES
 from .scanners import SKIP_DIRS, is_scannable
-
-MAX_FILE_BYTES = 200_000  # per-file cap
 
 
 def _walk_repo(root: str) -> dict[str, str]:
@@ -23,7 +22,7 @@ def _walk_repo(root: str) -> dict[str, str]:
         if not is_scannable(p.name):
             continue
         try:
-            if p.stat().st_size > MAX_FILE_BYTES:
+            if p.stat().st_size > MAX_INGEST_FILE_BYTES:
                 continue
             rel = str(p.relative_to(root_path))
             out[rel] = p.read_text(encoding="utf-8", errors="replace")
@@ -45,7 +44,7 @@ def extract_zip(zip_path: str) -> dict[str, str]:
                     continue
                 if not is_scannable(p.name):
                     continue
-                if info.file_size > MAX_FILE_BYTES:
+                if info.file_size > MAX_INGEST_FILE_BYTES:
                     continue
                 try:
                     files[info.filename] = z.read(info.filename).decode("utf-8", errors="replace")

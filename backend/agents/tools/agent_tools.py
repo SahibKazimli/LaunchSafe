@@ -17,6 +17,7 @@ from typing import Annotated, Any
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
+from ..config import MAX_BATCH_BYTES, MAX_FILES_PER_BATCH, MAX_FINDINGS_PER_TOOL
 from .scanners import (
     scan_api,
     scan_auth,
@@ -25,8 +26,6 @@ from .scanners import (
     scan_privacy,
     scan_secrets,
 )
-
-MAX_FINDINGS_PER_TOOL = 40
 
 
 def _format(findings: list[dict[str, Any]]) -> str:
@@ -115,8 +114,7 @@ def read_file(path: str, state: Annotated[dict, InjectedState]) -> str:
     return json.dumps({"path": path, "content": content})
 
 
-MAX_FILES_PER_BATCH = 10
-MAX_BATCH_BYTES = 120_000
+# MAX_FILES_PER_BATCH and MAX_BATCH_BYTES imported from config
 
 
 @tool

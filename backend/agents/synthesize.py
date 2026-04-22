@@ -16,9 +16,9 @@ it is pure post-processing + a single LLM call.
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
+from .config import LLM_MODEL, SYNTH_MAX_TOKENS
 from .runtime_log import emit
 from .schemas import AuditReport, ComplianceRef, Finding
 from .tools.scanners import SEVERITY_DEFAULT_CVSS, infer_exposure_from_path
@@ -229,8 +229,7 @@ def _llm_summary(target: str, findings: list[Finding], branches: dict[str, int])
     )
 
     try:
-        model_name = os.environ.get("LAUNCHSAFE_LLM_MODEL", "claude-sonnet-4-5")
-        llm = ChatAnthropic(model=model_name, max_tokens=2048, temperature=0)
+        llm = ChatAnthropic(model=LLM_MODEL, max_tokens=SYNTH_MAX_TOKENS, temperature=0)
         structured = llm.with_structured_output(AuditReport)
         result: AuditReport = structured.invoke(
             [{"role": "system", "content": system},

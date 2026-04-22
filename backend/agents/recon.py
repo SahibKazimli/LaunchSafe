@@ -17,9 +17,11 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 
+from .config import LLM_MODEL, RECON_MAX_TOKENS
 from .runtime_log import emit
 from .schemas import RepoProfile
 from .state import ScanAgentState
+from .stream import iter_stream_events
 from .tools.agent_tools import list_repo_files, read_file, read_files
 
 RECON_PROMPT = """\
@@ -63,8 +65,7 @@ def _build_recon_agent():
     from langchain_anthropic import ChatAnthropic
     from langgraph.prebuilt import create_react_agent
 
-    model_name = os.environ.get("LAUNCHSAFE_LLM_MODEL", "claude-sonnet-4-5")
-    llm = ChatAnthropic(model=model_name, max_tokens=2048, temperature=0)
+    llm = ChatAnthropic(model=LLM_MODEL, max_tokens=RECON_MAX_TOKENS, temperature=0)
 
     return create_react_agent(
         model=llm,
@@ -115,38 +116,10 @@ async def recon_node(state: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(chunk, dict):
             continue
         final_state = chunk
-        for msg in chunk.get("messages", []) or []:
-            msg_id = getattr(msg, "id", None)
-            if msg_id and msg_id in seen_msg_ids:
-                continue
-            if msg_id:
-                seen_msg_ids.add(msg_id)
-            msg_type = getattr(msg, "type", None)
-            if msg_type == "ai":
-                content = getattr(msg, "content", "")
-                if isinstance(content, str) and content.strip():
-                    emit(scan_id, "think", content.strip(), branch="recon")
-                elif isinstance(content, list):
-                    for block in content:
-                        if isinstance(block, dict) and block.get("type") == "text":
-                            txt = (block.get("text") or "").strip()
-                            if txt:
-                                emit(scan_id, "think", txt, branch="recon")
-                for tc in getattr(msg, "tool_calls", None) or []:
-                    tc_name = tc.get("name", "?") if isinstance(tc, dict) else "?"
-                    args = tc.get("args") or {} if isinstance(tc, dict) else {}
-                    arg_parts = []
-                    for k, v in list(args.items())[:2]:
-                        s = str(v)
-                        if len(s) > 50:
-                            s = s[:47] + "…"
-                        arg_parts.append(f"{k}={s}")
-                    emit(scan_id, "call", f"{tc_name}({', '.join(arg_parts)})", branch="recon")
-            elif msg_type == "tool":
-                tool_name = getattr(msg, "name", "?")
-                content = getattr(msg, "content", "") or ""
-                size = len(content) if isinstance(content, str) else 0
-                emit(scan_id, "result", f"{tool_name} → {size}B", branch="recon")
+        # Use shared stream helper — no salvage bucket for recon
+        iter_stream_events(
+            chunk, seen_msg_ids, scan_id, branch="recon",
+        )
 
     result = final_state or {}
     profile = result.get("structured_response")

@@ -28,7 +28,6 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from core.config import (
-    LLM_MODEL,
     SPEC_MAX_TOKENS,
     SPEC_MAX_TOOL_CALLS,
     SPEC_RECURSION_LIMIT,
@@ -242,10 +241,10 @@ _AGENTS: dict[str, Any] = {}
 
 
 def _build_specialist(name: str, prompt: str):
-    from langchain_anthropic import ChatAnthropic
+    from agents.llm import get_llm
     from langgraph.prebuilt import create_react_agent
 
-    llm = ChatAnthropic(model=LLM_MODEL, max_tokens=SPEC_MAX_TOKENS, temperature=0)
+    llm = get_llm(max_tokens=SPEC_MAX_TOKENS)
 
     return create_react_agent(
         model=llm,

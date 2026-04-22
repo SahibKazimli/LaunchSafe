@@ -41,15 +41,15 @@ def _env_float(key: str, default: float) -> float:
 # LLM / agent knobs
 
 
-LLM_MODEL: str             = _env_str("LLM_MODEL", "claude-sonnet-4-5")
+LLM_MODEL: str             = _env_str("LLM_MODEL", "gemini-3.0-flash")
 
 SPEC_RECURSION_LIMIT: int   = _env_int("SPEC_RECURSION_LIMIT", 20)
-SPEC_MAX_TOKENS: int        = _env_int("SPEC_MAX_TOKENS", 4096)
-SPEC_MAX_TOOL_CALLS: int    = _env_int("SPEC_MAX_TOOL_CALLS", 30)
+SPEC_MAX_TOKENS: int        = _env_int("SPEC_MAX_TOKENS", 2048)
+SPEC_MAX_TOOL_CALLS: int    = _env_int("SPEC_MAX_TOOL_CALLS", 15)
 
-RECON_MAX_TOKENS: int       = _env_int("RECON_MAX_TOKENS", 2048)
-SYNTH_MAX_TOKENS: int       = _env_int("SYNTH_MAX_TOKENS", 2048)
-AI_SCAN_MAX_TOKENS: int     = _env_int("AI_SCAN_MAX_TOKENS", 3072)
+RECON_MAX_TOKENS: int       = _env_int("RECON_MAX_TOKENS", 1024)
+SYNTH_MAX_TOKENS: int       = _env_int("SYNTH_MAX_TOKENS", 1024)
+AI_SCAN_MAX_TOKENS: int     = _env_int("AI_SCAN_MAX_TOKENS", 1536)
 
 
 

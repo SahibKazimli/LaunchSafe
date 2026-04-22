@@ -37,15 +37,15 @@ from core.routes import router
 
 app = FastAPI(title="LaunchSafe")
 
-# Print the first 12 chars of the loaded ANTHROPIC_API_KEY so the
-# operator can confirm at a glance which key is in use this session.
-# We never print the secret part. If this prefix doesn't match the key
-# you put in .env, you have a stale shell var or .env wasn't loaded.
-_loaded_key = os.environ.get("ANTHROPIC_API_KEY", "")
-if _loaded_key:
-    print(f"[LaunchSafe] ANTHROPIC_API_KEY loaded: {_loaded_key[:12]}…")
+_gemini_key = os.environ.get("GOOGLE_API_KEY", "")
+_anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+
+if _gemini_key:
+    print(f"[LaunchSafe] Provider: Gemini  key: {_gemini_key[:12]}…")
+elif _anthropic_key:
+    print(f"[LaunchSafe] Provider: Anthropic  key: {_anthropic_key[:12]}…")
 else:
-    print("[LaunchSafe] ANTHROPIC_API_KEY NOT set — will fall back to regex-only scans")
+    print("[LaunchSafe] No LLM API key found — regex-only fallback mode")
 
 # Wire the event-bus that graph nodes use to push live UI events.
 setup_event_bus()

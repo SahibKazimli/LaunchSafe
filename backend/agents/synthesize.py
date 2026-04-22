@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.config import LLM_MODEL, SYNTH_MAX_TOKENS
+from core.config import SYNTH_MAX_TOKENS
 from .runtime_log import emit
 from .schemas import AuditReport, ComplianceRef, Finding
 from tools.scanners import SEVERITY_DEFAULT_CVSS, infer_exposure_from_path
@@ -191,8 +191,8 @@ def _llm_summary(target: str, findings: list[Finding], branches: dict[str, int])
         )
 
     try:
-        from langchain_anthropic import ChatAnthropic
-    except Exception:  
+        from agents.llm import get_llm
+    except Exception:
         return None
 
     rendered = []
@@ -228,7 +228,7 @@ def _llm_summary(target: str, findings: list[Finding], branches: dict[str, int])
     )
 
     try:
-        llm = ChatAnthropic(model=LLM_MODEL, max_tokens=SYNTH_MAX_TOKENS, temperature=0)
+        llm = get_llm(max_tokens=SYNTH_MAX_TOKENS)
         structured = llm.with_structured_output(AuditReport)
         result: AuditReport = structured.invoke(
             [{"role": "system", "content": system},

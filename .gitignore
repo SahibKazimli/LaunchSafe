@@ -20,4 +20,4 @@ frontend/logs/
 frontend/reports/
 frontend/screenshots/
 frontend/screenshots/
-
+.DS_Store

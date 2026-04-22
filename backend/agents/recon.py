@@ -17,7 +17,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 
-from core.config import LLM_MODEL, RECON_MAX_TOKENS
+from core.config import RECON_MAX_TOKENS
 from .runtime_log import emit
 from .schemas import RepoProfile
 from .state import ScanAgentState
@@ -62,10 +62,10 @@ _recon_agent = None
 
 
 def _build_recon_agent():
-    from langchain_anthropic import ChatAnthropic
+    from agents.llm import get_llm
     from langgraph.prebuilt import create_react_agent
 
-    llm = ChatAnthropic(model=LLM_MODEL, max_tokens=RECON_MAX_TOKENS, temperature=0)
+    llm = get_llm(max_tokens=RECON_MAX_TOKENS)
 
     return create_react_agent(
         model=llm,

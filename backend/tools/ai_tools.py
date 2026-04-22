@@ -27,7 +27,6 @@ from agents.schemas import (
 )
 from core.config import (
     AI_SCAN_MAX_TOKENS,
-    LLM_MODEL,
     MAX_AUTH_BUNDLE_BYTES,
     MAX_CICD_BUNDLE_BYTES,
     MAX_FILE_BYTES,
@@ -84,9 +83,8 @@ FOCUS_INSTRUCTIONS = {
 
 
 def _get_llm():
-    from langchain_anthropic import ChatAnthropic
-
-    return ChatAnthropic(model=LLM_MODEL, max_tokens=AI_SCAN_MAX_TOKENS, temperature=0)
+    from agents.llm import get_llm
+    return get_llm(max_tokens=AI_SCAN_MAX_TOKENS)
 
 
 def _truncate(content: str, limit: int) -> str:

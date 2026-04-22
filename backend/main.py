@@ -2,7 +2,7 @@
 FastAPI backend + LangGraph multi-agent pipeline powered by Claude.
 Run: uvicorn main:app --reload
 
-This file is PURE BOOTSTRAP / WIRING.  All logic lives in dedicated
+This file is pure wiring. All logic lives in dedicated
 modules:
   - core/routes.py       → HTTP endpoints
   - core/orchestrator.py → scan orchestration
@@ -18,10 +18,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# Load backend/.env BEFORE importing anything that might read env vars
-# (LangChain/Anthropic clients capture ANTHROPIC_API_KEY at import time
-# in some versions). `override=True` makes .env win over a stale shell
-# variable from a previous session — important when swapping API keys.
+
 try:
     from dotenv import load_dotenv
 
@@ -37,7 +34,7 @@ from core.routes import router
 
 app = FastAPI(title="LaunchSafe")
 
-_gemini_key = os.environ.get("GOOGLE_API_KEY", "")
+_gemini_key = os.environ.get("GEMINI_API_KEY", "")
 _anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
 
 if _gemini_key:

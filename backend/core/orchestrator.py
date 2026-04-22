@@ -42,7 +42,7 @@ async def run_scan(scan_id: str, files: dict[str, str]) -> None:
 
     emit(scan_id, "info", f"Starting scan of {len(files)} files", branch="outer")
 
-    if not os.environ.get("GOOGLE_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
+    if not os.environ.get("GEMINI_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
         emit(scan_id, "warn", "No ANTHROPIC_API_KEY — regex-only fallback", branch="outer")
         await _run_regex_fallback(scan_id, files)
         return

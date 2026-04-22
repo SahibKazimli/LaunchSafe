@@ -41,7 +41,7 @@ def _env_float(key: str, default: float) -> float:
 # LLM / agent knobs
 
 
-LLM_MODEL: str             = _env_str("LLM_MODEL", "gemini-3.0-flash")
+LLM_MODEL: str             = _env_str("LLM_MODEL", "gemini-3.1-pro-preview")
 
 SPEC_RECURSION_LIMIT: int   = _env_int("SPEC_RECURSION_LIMIT", 20)
 SPEC_MAX_TOKENS: int        = _env_int("SPEC_MAX_TOKENS", 2048)

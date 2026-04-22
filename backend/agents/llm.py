@@ -7,14 +7,14 @@ directly.
 Provider selection order
 ------------------------
 1. If ``LAUNCHSAFE_LLM_MODEL`` starts with ``gemini`` → use Gemini via
-   ``langchain-google-genai`` (reads ``GOOGLE_API_KEY``).
+   ``langchain-google-genai`` (reads ``GEMINI_API_KEY``).
 2. Otherwise → use Anthropic Claude via ``langchain-anthropic`` (reads
    ``ANTHROPIC_API_KEY``).
 
 Switching provider is a one-line change in ``.env``::
 
-    LAUNCHSAFE_LLM_MODEL=gemini-3.0-flash   # cheap + fast
-    LAUNCHSAFE_LLM_MODEL=gemini-3.1-pro     # higher quality
+    LAUNCHSAFE_LLM_MODEL=gemini-3-flash-preview       # cheap + fast
+    LAUNCHSAFE_LLM_MODEL=gemini-3.1-pro-preview       # higher quality
     LAUNCHSAFE_LLM_MODEL=claude-sonnet-4-5  # back to Claude
 """
 
@@ -53,6 +53,8 @@ def _is_gemini(model: str) -> bool:
 
 
 def _make_gemini(model: str, **kwargs):
+    import os
+
     try:
         from langchain_google_genai import ChatGoogleGenerativeAI
     except ImportError as exc:
@@ -67,6 +69,9 @@ def _make_gemini(model: str, **kwargs):
     max_tokens = kwargs.pop("max_tokens", None)
     if max_tokens is not None:
         kwargs["max_output_tokens"] = max_tokens
+
+    if "api_key" not in kwargs and os.environ.get("GEMINI_API_KEY"):
+        kwargs["api_key"] = os.environ.get("GEMINI_API_KEY")
 
     return ChatGoogleGenerativeAI(model=model, **kwargs)
 

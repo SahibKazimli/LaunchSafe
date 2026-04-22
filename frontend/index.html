@@ -78,14 +78,6 @@
     </div>
 
     <form id="scan-form" method="POST" action="/start-scan" enctype="multipart/form-data">
-      <div class="upload-zone" id="dropzone">
-        <input type="file" name="file" id="file-input" accept=".zip">
-        <h3>Drop your codebase here</h3>
-        <p>ZIP archive · .env files · Terraform configs · OpenAPI specs</p>
-      </div>
-      <div class="file-selected" id="file-selected-label"></div>
-
-      <div class="divider">or scan a GitHub URL (uses demo analysis)</div>
 
       <div class="github-input-row">
         <input type="text" name="github_url" id="github-url" placeholder="https://github.com/your-org/your-repo" />
@@ -99,25 +91,6 @@
 
 {% block scripts %}
 <script>
-  const dz = document.getElementById('dropzone');
-  const fi = document.getElementById('file-input');
-  const label = document.getElementById('file-selected-label');
-
-  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
-  dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
-  dz.addEventListener('drop', e => {
-    e.preventDefault(); dz.classList.remove('dragover');
-    fi.files = e.dataTransfer.files;
-    showFile(fi.files[0]);
-  });
-  fi.addEventListener('change', () => showFile(fi.files[0]));
-
-  function showFile(f) {
-    if (!f) return;
-    label.style.display = 'block';
-    label.textContent = f.name + ' (' + (f.size / 1024).toFixed(0) + ' KB)';
-  }
-
   document.getElementById('scan-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = e.target.querySelector('[type=submit]');

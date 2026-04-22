@@ -374,4 +374,7 @@ class RepoProfile(BaseModel):
             "layer, IaC, CI/CD workflows, files handling user input."
         ),
     )
-    summary: str = Field(description="2-3 sentence description of the app and its headline risk surface")
+    summary: str = Field(
+        default="",
+        description="2-3 sentence description of the app and its headline risk surface",
+    )

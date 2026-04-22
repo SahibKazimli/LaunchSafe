@@ -10,6 +10,7 @@ import asyncio
 import os
 import tempfile
 import uuid
+import re
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse
@@ -17,7 +18,7 @@ from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
 from core.config import EVENT_API_TAIL
-from tools.ingest import clone_github, extract_zip
+from tools.ingest import clone_github
 from tools.scanners import compute_score, score_breakdown
 from core import scan_store as _ss
 
@@ -28,6 +29,75 @@ _FRONTEND = (_BACKEND.parent / "frontend").resolve()
 templates = Jinja2Templates(directory=str(_FRONTEND))
 
 router = APIRouter()
+
+_OWASP_TAG_URLS = {
+    "OWASP A01:2021": "https://owasp.org/Top10/A01_2021-Broken_Access_Control/",
+    "OWASP A02:2021": "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/",
+    "OWASP A03:2021": "https://owasp.org/Top10/A03_2021-Injection/",
+    "OWASP A04:2021": "https://owasp.org/Top10/A04_2021-Insecure_Design/",
+    "OWASP A05:2021": "https://owasp.org/Top10/A05_2021-Security_Misconfiguration/",
+    "OWASP A06:2021": "https://owasp.org/Top10/A06_2021-Vulnerable_and_Outdated_Components/",
+    "OWASP A07:2021": "https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures/",
+    "OWASP A08:2021": "https://owasp.org/Top10/A08_2021-Software_and_Data_Integrity_Failures/",
+    "OWASP A09:2021": "https://owasp.org/Top10/A09_2021-Security_Logging_and_Monitoring_Failures/",
+    "OWASP A10:2021": "https://owasp.org/Top10/A10_2021-Server-Side_Request_Forgery_%28SSRF%29/",
+}
+
+
+def _normalize_owasp_id(raw_id: str) -> str:
+    s = (raw_id or "").strip().upper().replace("-", " ")
+    m = re.search(r"OWASP\s+A0?(10|[1-9])", s)
+    if not m:
+        return ""
+    num = int(m.group(1))
+    if num < 1 or num > 10:
+        return ""
+    return f"OWASP A{num:02d}:2021"
+
+
+def _fallback_compliance_url(tag_id: str) -> str | None:
+    canonical = _normalize_owasp_id(tag_id)
+    if canonical:
+        return _OWASP_TAG_URLS.get(canonical)
+    return None
+
+
+def _normalize_compliance_tags(raw_tags: list) -> list:
+    out = []
+    for tag in raw_tags or []:
+        if hasattr(tag, "model_dump"):
+            try:
+                tag = tag.model_dump()
+            except Exception:
+                pass
+        if isinstance(tag, dict):
+            tid = str(tag.get("id") or "").strip()
+            if not tid:
+                continue
+            out.append({
+                "id": tid,
+                "summary": str(tag.get("summary") or "").strip(),
+                "url": tag.get("url") or _fallback_compliance_url(tid),
+            })
+        elif hasattr(tag, "id"):
+            tid = str(getattr(tag, "id", "") or "").strip()
+            if not tid:
+                continue
+            out.append({
+                "id": tid,
+                "summary": str(getattr(tag, "summary", "") or "").strip(),
+                "url": getattr(tag, "url", None) or _fallback_compliance_url(tid),
+            })
+        elif isinstance(tag, str):
+            tid = tag.strip()
+            if not tid:
+                continue
+            out.append({
+                "id": tid,
+                "summary": "",
+                "url": _fallback_compliance_url(tid),
+            })
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -64,12 +134,14 @@ async def report_page(request: Request, scan_id: str):
     for f, row in zip(findings, breakdown["rows"]):
         ef = dict(f)
         ef["_score"] = row
+        ef["compliance"] = _normalize_compliance_tags(ef.get("compliance", []))
         enriched.append(ef)
     return templates.TemplateResponse(request, "report.html", {
         "scan": scan,
         "findings": enriched,
         "counts": counts,
         "total": len(findings),
+        "breakdown": breakdown,
     })
 
 
@@ -91,10 +163,11 @@ async def start_scan(
     files: dict[str, str] = {}
     user_provided_input = bool(github_url.strip()) or bool(file and file.filename)
 
+    # GitHub flow
     if github_url.strip():
         try:
             files = await asyncio.to_thread(clone_github, github_url.strip())
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             _ss.update_scan(
                 scan_id,
                 status="error",
@@ -102,23 +175,21 @@ async def start_scan(
             )
             return {"scan_id": scan_id}
 
+    # ZIP upload flow (YOU DID NOT REMOVE THIS BEFORE)
     elif file and file.filename:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
             tmp.write(await file.read())
             tmp_path = tmp.name
+
         files = extract_zip(tmp_path)
         os.unlink(tmp_path)
 
+    # fallback handling
     if user_provided_input and not files:
         _ss.update_scan(
             scan_id,
             status="error",
-            error=(
-                "Repo cloned but no scannable files found. Supported extensions "
-                "include .py .js .ts .go .rs .c .h .cpp .java .md .yaml .tf and "
-                "files like Makefile / Dockerfile / README. Check that the repo "
-                "is public and contains source code."
-            ),
+            error="Repo cloned but no scannable files found.",
         )
         return {"scan_id": scan_id}
 
@@ -127,7 +198,6 @@ async def start_scan(
 
     asyncio.create_task(run_scan(scan_id, files))
     return {"scan_id": scan_id}
-
 
 @router.get("/scan-status/{scan_id}")
 async def scan_status(scan_id: str, since: int = 0):

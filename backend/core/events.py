@@ -1,18 +1,20 @@
 """Event-bus wiring for live scan progress.
 
-Registers a push_event sink that graph nodes call (via
-agents.runtime_log.emit) to stream live events into the scan store.
-The frontend polls /scan-status and picks up whatever it finds.
+Registers a ``push_event`` sink that graph nodes call (via
+``agents.runtime_log.emit``) to stream live events into the scan store.
+The frontend polls ``/scan-status`` and picks up whatever it finds.
+
+Import this module early in app bootstrap to wire the sink before any
+graph node runs.
 """
 
 from __future__ import annotations
 
 import time as _time
 
-from agents.config import EVENT_RING_CAP
+from core.config import EVENT_RING_CAP
 from agents.runtime_log import set_event_sink
-
-import scan_store as _ss
+from core import scan_store as _ss
 
 
 def push_event(

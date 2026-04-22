@@ -17,6 +17,8 @@ Branches:
 Each specialist gets the full tool set so it can still explore. Its
 prompt is what narrows the focus — that lets a specialist follow a thread
 into adjacent code without us having to plumb a custom tool list.
+
+This is where I think we can also use that Orchestration layer we talked about to refine agent behavior.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from .config import (
+from core.config import (
     LLM_MODEL,
     SPEC_MAX_TOKENS,
     SPEC_MAX_TOOL_CALLS,
@@ -40,8 +42,8 @@ from .schemas import (
 )
 from .state import ScanAgentState
 from .stream import collect_salvage, iter_stream_events
-from .tools.agent_tools import ALL_TOOLS as REGEX_TOOLS
-from .tools.ai_tools import AI_TOOLS
+from tools.agent_tools import ALL_TOOLS as REGEX_TOOLS
+from tools.ai_tools import AI_TOOLS
 
 ALL_AGENT_TOOLS = REGEX_TOOLS + AI_TOOLS
 
@@ -299,7 +301,7 @@ def _make_specialist_node(name: str, prompt: str, kickoff_msg: str):
                         tool_calls_so_far=tool_calls,
                         salvage_bucket=salvage_bucket,
                     )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             crashed_with = str(exc)[:200]
             emit(scan_id, "warn", f"{name} crashed: {crashed_with[:140]}", branch=name)
 

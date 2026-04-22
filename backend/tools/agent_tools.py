@@ -17,7 +17,7 @@ from typing import Annotated, Any
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
-from ..config import MAX_BATCH_BYTES, MAX_FILES_PER_BATCH, MAX_FINDINGS_PER_TOOL
+from core.config import MAX_BATCH_BYTES, MAX_FILES_PER_BATCH, MAX_FINDINGS_PER_TOOL
 from .scanners import (
     scan_api,
     scan_auth,

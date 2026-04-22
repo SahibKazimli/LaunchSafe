@@ -19,13 +19,13 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 from pydantic import BaseModel, Field
 
-from ..schemas import (
+from agents.schemas import (
     COMPLIANCE_INSTRUCTIONS,
     CVSS_AND_EXPOSURE_RUBRIC,
     SEVERITY_RUBRIC,
     Finding,
 )
-from ..config import (
+from core.config import (
     AI_SCAN_MAX_TOKENS,
     LLM_MODEL,
     MAX_AUTH_BUNDLE_BYTES,

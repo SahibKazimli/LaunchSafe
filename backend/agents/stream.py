@@ -14,7 +14,7 @@ from __future__ import annotations
 import json as _json
 from typing import Any
 
-from .config import AI_SCAN_TOOL_NAMES
+from core.config import AI_SCAN_TOOL_NAMES
 from .runtime_log import emit
 
 

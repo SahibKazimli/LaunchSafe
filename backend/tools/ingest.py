@@ -6,7 +6,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from ..config import MAX_INGEST_FILE_BYTES
+from core.config import MAX_INGEST_FILE_BYTES
 from .scanners import SKIP_DIRS, is_scannable
 
 

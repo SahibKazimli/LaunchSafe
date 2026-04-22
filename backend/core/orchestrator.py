@@ -1,8 +1,6 @@
-"""Scan orchestration, drives the LangGraph pipeline or regex fallback.
+"""Scan orchestration — drives the LangGraph pipeline or regex fallback.
 
-We can build the proper Orchestration Layer here later as we've imagined. 
-
-Extracted from main.py so the API routes don't contain business logic.
+Extracted from ``main.py`` so the API routes don't contain business logic.
 """
 
 from __future__ import annotations
@@ -12,7 +10,7 @@ import os
 from typing import Any
 
 from agents.runtime_log import emit
-from agents.tools.scanners import (
+from tools.scanners import (
     compute_score,
     scan_api,
     scan_auth,
@@ -21,22 +19,21 @@ from agents.tools.scanners import (
     scan_privacy,
     scan_secrets,
 )
-
-import scan_store as _ss
+from core import scan_store as _ss
 
 
 async def run_scan(scan_id: str, files: dict[str, str]) -> None:
     """Drive the LangGraph multi-agent pipeline end-to-end.
 
-    Topology lives in agents/graph.py
+    Topology lives in ``agents/graph.py``::
 
-    recon -> [general/payments/iac/auth/cicd in parallel] -> synthesize.
+        recon -> [general/payments/iac/auth/cicd in parallel] -> synthesize.
 
     Each node logs branch-tagged events via the shared event-bus
-    (agents.runtime_log), so the frontend just polls scan-status
+    (``agents.runtime_log``), so the frontend just polls ``scan-status``
     and renders whatever it finds.
 
-    Falls back to a pure-regex scan if API key is missing.
+    Falls back to a pure-regex scan if ``ANTHROPIC_API_KEY`` is missing.
     """
     _ss.mark_running(scan_id)
     scan = _ss.get_scan(scan_id)
@@ -79,7 +76,7 @@ async def run_scan(scan_id: str, files: dict[str, str]) -> None:
         if report is not None:
             try:
                 report_findings = [
-                    finding.model_dump() for finding in getattr(report, "findings", []) or []
+                    f.model_dump() for f in getattr(report, "findings", []) or []
                 ]
                 summary = getattr(report, "summary", "") or ""
                 top_fixes = list(getattr(report, "top_fixes", []) or [])
@@ -89,9 +86,9 @@ async def run_scan(scan_id: str, files: dict[str, str]) -> None:
 
         # Salvage branch findings if synthesize produced nothing
         salvaged = [
-            finding
-            for finding in (final_state or {}).get("branch_findings", []) or []
-            if isinstance(finding, dict) and "_error" not in finding
+            f
+            for f in (final_state or {}).get("branch_findings", []) or []
+            if isinstance(f, dict) and "_error" not in f
         ]
         if not report_findings and salvaged:
             emit(
@@ -120,13 +117,13 @@ async def run_scan(scan_id: str, files: dict[str, str]) -> None:
             overall_risk=overall_risk or ("high" if grade in ("D", "F") else "medium"),
         )
 
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         salvaged: list[dict] = []
         try:
             salvaged = [
-                finding
-                for finding in (final_state or {}).get("branch_findings", []) or []
-                if isinstance(finding, dict) and "_error" not in finding
+                f
+                for f in (final_state or {}).get("branch_findings", []) or []
+                if isinstance(f, dict) and "_error" not in f
             ]
         except Exception:
             pass

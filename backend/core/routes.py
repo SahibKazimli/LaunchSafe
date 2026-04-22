@@ -1,7 +1,7 @@
-"""FastAPI route handlers.
+"""FastAPI route handlers for LaunchSafe.
 
-All HTTP endpoints live here. main.py includes the router during
-app bootstrap via app.include_router(router).
+All HTTP endpoints live here.  ``main.py`` includes the router during
+app bootstrap via ``app.include_router(router)``.
 """
 
 from __future__ import annotations
@@ -16,20 +16,23 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
-from agents.config import EVENT_API_TAIL
-from agents.tools.ingest import clone_github, extract_zip
-from agents.tools.scanners import compute_score, score_breakdown
+from core.config import EVENT_API_TAIL
+from tools.ingest import clone_github, extract_zip
+from tools.scanners import compute_score, score_breakdown
+from core import scan_store as _ss
 
-import scan_store as _ss
-
-_HERE = Path(__file__).resolve().parent
-_FRONTEND = (_HERE.parent / "frontend").resolve()
+_HERE = Path(__file__).resolve().parent          # backend/core/
+_BACKEND = _HERE.parent                          # backend/
+_FRONTEND = (_BACKEND.parent / "frontend").resolve()
 
 templates = Jinja2Templates(directory=str(_FRONTEND))
 
 router = APIRouter()
 
+
+# ---------------------------------------------------------------------------
 # Pages
+# ---------------------------------------------------------------------------
 
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request):
@@ -51,17 +54,17 @@ async def report_page(request: Request, scan_id: str):
 
     findings = scan["findings"]
     counts = {
-        "critical": sum(1 for finding in findings if finding["severity"] == "critical"),
-        "high":     sum(1 for finding in findings if finding["severity"] == "high"),
-        "medium":   sum(1 for finding in findings if finding["severity"] == "medium"),
-        "low":      sum(1 for finding in findings if finding["severity"] == "low"),
+        "critical": sum(1 for f in findings if f["severity"] == "critical"),
+        "high":     sum(1 for f in findings if f["severity"] == "high"),
+        "medium":   sum(1 for f in findings if f["severity"] == "medium"),
+        "low":      sum(1 for f in findings if f["severity"] == "low"),
     }
     breakdown = score_breakdown(findings)
     enriched: list[dict] = []
-    for finding, row in zip(findings, breakdown["rows"]):
-        enriched_finding = dict(finding)
-        enriched_finding["_score"] = row
-        enriched.append(enriched_finding)
+    for f, row in zip(findings, breakdown["rows"]):
+        ef = dict(f)
+        ef["_score"] = row
+        enriched.append(ef)
     return templates.TemplateResponse(request, "report.html", {
         "scan": scan,
         "findings": enriched,
@@ -69,14 +72,17 @@ async def report_page(request: Request, scan_id: str):
         "total": len(findings),
     })
 
+
+# ---------------------------------------------------------------------------
 # API
+# ---------------------------------------------------------------------------
 
 @router.post("/start-scan")
 async def start_scan(
     file: UploadFile = File(None),
     github_url: str = Form(""),
 ):
-    from orchestrator import run_scan
+    from core.orchestrator import run_scan
 
     scan_id = str(uuid.uuid4())[:8]
     target = github_url.strip() or (file.filename if file else "uploaded file")
@@ -88,7 +94,7 @@ async def start_scan(
     if github_url.strip():
         try:
             files = await asyncio.to_thread(clone_github, github_url.strip())
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             _ss.update_scan(
                 scan_id,
                 status="error",
@@ -165,9 +171,9 @@ async def get_findings(scan_id: str, severity: str = "all"):
     return {"findings": findings}
 
 
-
+# ---------------------------------------------------------------------------
 # Demo / fallback data
-
+# ---------------------------------------------------------------------------
 
 def _demo_files() -> dict[str, str]:
     """Demo files with intentional vulnerabilities for demonstration."""

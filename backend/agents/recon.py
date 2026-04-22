@@ -17,12 +17,12 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 
-from .config import LLM_MODEL, RECON_MAX_TOKENS
+from core.config import LLM_MODEL, RECON_MAX_TOKENS
 from .runtime_log import emit
 from .schemas import RepoProfile
 from .state import ScanAgentState
 from .stream import iter_stream_events
-from .tools.agent_tools import list_repo_files, read_file, read_files
+from tools.agent_tools import list_repo_files, read_file, read_files
 
 RECON_PROMPT = """\
 You are a senior security auditor doing an initial reconnaissance pass on

@@ -4,11 +4,13 @@ Run: uvicorn main:app --reload
 
 This file is PURE BOOTSTRAP / WIRING.  All logic lives in dedicated
 modules:
-  - routes.py         → HTTP endpoints
-  - orchestrator.py   → scan orchestration
-  - scan_store.py     → in-memory scan state
-  - events.py         → live event-bus wiring
-  - agents/           → graph, recon, specialists, tools
+  - core/routes.py       → HTTP endpoints
+  - core/orchestrator.py → scan orchestration
+  - core/scan_store.py   → in-memory scan state
+  - core/events.py       → live event-bus wiring
+  - core/config.py       → centralized configuration
+  - agents/              → graph, recon, specialists, tools
+  - tools/               → scanners, AI tools, ingest
 """
 
 from __future__ import annotations
@@ -30,8 +32,8 @@ except ImportError:
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from events import setup_event_bus
-from routes import router
+from core.events import setup_event_bus
+from core.routes import router
 
 app = FastAPI(title="LaunchSafe")
 

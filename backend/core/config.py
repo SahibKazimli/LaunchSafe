@@ -101,7 +101,6 @@ GRADE_THRESHOLDS: list[tuple[str, float]] = [
 ]
 
 
-
 # AI-scan tool names 
 
 AI_SCAN_TOOL_NAMES: frozenset[str] = frozenset({

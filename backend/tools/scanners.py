@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ..config import EXPOSURE_MULTIPLIER, GRADE_THRESHOLDS, SEVERITY_DEFAULT_CVSS
+from core.config import EXPOSURE_MULTIPLIER, GRADE_THRESHOLDS, SEVERITY_DEFAULT_CVSS
 
 SECRET_PATTERNS = [
     (r"AKIA[0-9A-Z]{16}", "AWS Access Key ID", "critical"),

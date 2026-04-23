@@ -91,7 +91,7 @@ def find_file_content(path: str, files: dict[str, str]) -> tuple[str, str]:
         if ("/" + file_key).lower().endswith(path_lower):
             return file_key, file_content
 
-    return file_key, ""
+    return path, ""
 
 
 def resolve_path_to_canonical_key(path_hint: str, files: dict[str, str]) -> str:
@@ -115,6 +115,13 @@ def resolve_path_to_canonical_key(path_hint: str, files: dict[str, str]) -> str:
     ]
     if len(matches) == 1:
         return matches[0]
+    if len(matches) > 1:
+        hint_lower = (path_hint or "").lower().replace("\\", "/")
+        for fk in sorted(matches, key=lambda x: -len(x)):
+            if fk.lower() in hint_lower:
+                return fk
+        # Deterministic fallback: prefer longest path (usually more specific)
+        return sorted(matches, key=lambda x: -len(x))[0]
     return ""
 
 
@@ -162,6 +169,75 @@ def build_finding_file_bundle(
             if key in all_files:
                 out[key] = all_files[key]
     return out
+
+
+def parse_line_number_from_location(location: str) -> int | None:
+    """Return 1-based line number from ``path:42``-style locations, if present."""
+    loc = (location or "").strip().replace("\\", "/")
+    if ":" not in loc:
+        return None
+    _base, _sep, last = loc.rpartition(":")
+    if last.isdigit():
+        return int(last)
+    return None
+
+
+def build_excerpt_for_fix_prompt(
+    matched_path: str,
+    content: str,
+    group_findings: list[dict],
+    files: dict[str, str],
+    *,
+    full_file_max_chars: int = 200_000,
+    head_limit: int = 14_000,
+    line_margin: int = 30,
+) -> str:
+    """Build prompt text for the patch model.
+
+    Prefer the **complete ingested file** when it fits ``full_file_max_chars``
+    (same bytes we already store in scan/fix context). Otherwise use a line
+    window around cited locations, then a head truncation.
+    """
+    lines = content.splitlines(keepends=True)
+    n = len(lines)
+    line_nums: list[int] = []
+    for gf in group_findings:
+        if not isinstance(gf, dict):
+            continue
+        fk = resolve_path_to_canonical_key(gf.get("location", ""), files)
+        if fk != matched_path:
+            continue
+        ln = parse_line_number_from_location(gf.get("location", ""))
+        if ln is not None and ln >= 1:
+            line_nums.append(ln)
+
+    if len(content) <= full_file_max_chars:
+        return (
+            f"### {matched_path} (COMPLETE FILE — {n} lines, {len(content)} chars; "
+            "apply a minimal in-place fix)\n"
+            f"```\n{content}\n```"
+        )
+
+    if line_nums and n > 0:
+        lo = max(1, min(line_nums) - line_margin)
+        hi = min(n, max(line_nums) + line_margin)
+        excerpt = "".join(lines[lo - 1 : hi])
+        return (
+            f"### {matched_path} (lines {lo}-{hi} of {n}; file too large for full paste; "
+            "excerpt around cited finding line(s))\n"
+            f"```\n{excerpt}\n```"
+        )
+
+    excerpt = content[:head_limit]
+    if len(content) > head_limit:
+        excerpt += (
+            "\n...[truncated — file exceeds full-file prompt cap and has no line "
+            "numbers; showing start only]\n"
+        )
+    return (
+        f"### {matched_path} ({n} lines, {len(content)} bytes — excerpt only)\n"
+        f"```\n{excerpt}\n```"
+    )
 
 
 def merge_scan_files_for_fix(fix_session: dict[str, Any], scan: dict[str, Any]) -> dict[str, str]:

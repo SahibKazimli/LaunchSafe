@@ -18,10 +18,12 @@ from agents.runtime_log import emit
 from core.config import (
     FIX_PATCH_MAX_TOKENS,
     FIX_PLAN_MAX_TOKENS,
+    FIX_PROMPT_FULL_FILE_MAX_CHARS,
     FIX_REVIEW_MAX_TOKENS,
 )
 from core import scan_store as _ss
 from core.finding_files import (
+    build_excerpt_for_fix_prompt,
     find_file_content,
     infer_paths_from_finding_text,
     merge_scan_files_for_fix,
@@ -278,7 +280,31 @@ Rules:
   - Include new imports in the patched_snippet if needed.
   - If no file content was provided for a finding, skip it and note why
     in the PatchResult.notes field. Do NOT make up code.
+  - When file content IS provided below, you MUST emit at least one FilePatch
+    per file with non-empty original_snippet, patched_snippet, and diff.
+    Do not return an empty patch list for files you were given.
+  - If a block is labeled COMPLETE FILE, copy the vulnerable lines verbatim
+    into original_snippet and show the same region with your fix in patched_snippet.
 """
+
+_PATCH_RETRY_TAIL = (
+    "\n\nRetry / correction: Your previous answer had no real code changes. "
+    "You MUST return FilePatch entries with non-empty original_snippet, "
+    "patched_snippet, and a unified diff for each file shown under "
+    "ORIGINAL FILES. Apply the fix inside the excerpt you were given."
+)
+
+
+def _patch_result_has_body(result: PatchResult) -> bool:
+    for p in result.patches:
+        o = (p.original_snippet or "").strip()
+        s = (p.patched_snippet or "").strip()
+        d = (p.diff or "").strip()
+        if o and s:
+            return True
+        if len(d) > 40:
+            return True
+    return False
 
 
 def _make_diff(path: str, original: str, patched: str) -> str:
@@ -341,10 +367,15 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
         for path in target_keys:
             matched_path, content = find_file_content(path, files)
             if content:
-                snippet = content[:15_000]
-                if len(content) > 15_000:
-                    snippet += "\n...[truncated]"
-                file_sections.append(f"### {matched_path}\n```\n{snippet}\n```")
+                file_sections.append(
+                    build_excerpt_for_fix_prompt(
+                        matched_path,
+                        content,
+                        group_findings,
+                        files,
+                        full_file_max_chars=FIX_PROMPT_FULL_FILE_MAX_CHARS,
+                    ),
+                )
             else:
                 missing_files.append(path)
 
@@ -396,12 +427,25 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
                 {"role": "user", "content": user_msg},
             ])
 
+            if has_file_content and not _patch_result_has_body(result):
+                emit(
+                    fix_id, "warn",
+                    f"{label}: patch model returned empty bodies — one retry",
+                    branch=f"fix-{group_id}",
+                )
+                result = structured.invoke([
+                    {"role": "system", "content": _PATCH_SYSTEM + _PATCH_RETRY_TAIL},
+                    {"role": "user", "content": user_msg},
+                ])
+
             # Backfill diffs if the LLM didn't generate them
+            fallback_path = target_keys[0] if target_keys else "file"
             for patch in result.patches:
                 if not patch.diff and patch.original_snippet and patch.patched_snippet:
+                    use_path = (patch.path or "").strip() or fallback_path
                     patch.diff = _make_diff(
-                        patch.path, 
-                        patch.original_snippet, 
+                        use_path,
+                        patch.original_snippet,
                         patch.patched_snippet,
                     )
 

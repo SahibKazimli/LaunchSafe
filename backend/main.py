@@ -22,6 +22,7 @@ from pathlib import Path
 try:
     from dotenv import load_dotenv
 
+    # `override=True`: variables in backend/.env replace the process environment — update .env to change keys.
     load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
 except ImportError:
     pass
@@ -37,12 +38,29 @@ app = FastAPI(title="LaunchSafe")
 _gemini_key = os.environ.get("GEMINI_API_KEY", "")
 _anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
 
-if _gemini_key:
-    print(f"[LaunchSafe] Provider: Gemini  key: {_gemini_key[:12]}…")
-elif _anthropic_key:
-    print(f"[LaunchSafe] Provider: Anthropic  key: {_anthropic_key[:12]}…")
+# Log the **active** provider from the configured model, not "whichever key exists first".
+try:
+    from core.config import LLM_MODEL
+except Exception:  # noqa: BLE001
+    LLM_MODEL = os.environ.get("LAUNCHSAFE_LLM_MODEL", "claude-sonnet-4-5-20250929")
+
+_m = (LLM_MODEL or "").lower()
+if _m.startswith("gemini"):
+    _active = "gemini"
+    _key = _gemini_key
 else:
-    print("[LaunchSafe] No LLM API key found — regex-only fallback mode")
+    _active = "anthropic"
+    _key = _anthropic_key
+
+if not _key:
+    print(
+        f"[LaunchSafe] LLM model: {LLM_MODEL}  no API key for active provider "
+        f"({_active}) — regex-only fallback mode"
+    )
+else:
+    print(
+        f"[LaunchSafe] LLM model: {LLM_MODEL}  provider: {_active}  key: {_key[:12]}…"
+    )
 
 # Wire the event-bus that graph nodes use to push live UI events.
 setup_event_bus()

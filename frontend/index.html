@@ -1,7 +1,12 @@
-{% extends "base.html" %}
-{% block title %}LaunchSafe — Startup Security Auditor{% endblock %}
-
-{% block extra_styles %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LaunchSafe — Startup Security Auditor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/common.css">
 <style>
   #screen-upload {
     min-height: calc(100vh - 65px);
@@ -42,9 +47,14 @@
   }
   .mod-chip strong { display: block; color: var(--text); font-size: 14px; margin-bottom: 2px; font-weight: 500; }
 </style>
-{% endblock %}
-
-{% block content %}
+</head>
+<body>
+<nav>
+  <a href="/" class="logo">LaunchSafe</a>
+  <div class="nav-right">
+    <span class="nav-badge">v0.1 · Python + FastAPI</span>
+  </div>
+</nav>
 <section id="screen-upload">
   <div class="hero fadein">
     <div class="hero-eyebrow">Security Audit Platform</div>
@@ -70,20 +80,6 @@
     </form>
   </div>
 </section>
-{% endblock %}
-
-{% block scripts %}
-<script>
-  document.getElementById('scan-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const btn = e.target.querySelector('[type=submit]');
-    btn.textContent = 'Starting scan…';
-    btn.disabled = true;
-
-    const formData = new FormData(e.target);
-    const res = await fetch('/start-scan', { method: 'POST', body: formData });
-    const { scan_id } = await res.json();
-    window.location.href = '/scan/' + scan_id;
-  });
-</script>
-{% endblock %}
+<script type="module" src="/src/index.ts"></script>
+</body>
+</html>

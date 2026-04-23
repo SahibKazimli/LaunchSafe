@@ -1,7 +1,12 @@
-{% extends "base.html" %}
-{% block title %}Fix Session — LaunchSafe{% endblock %}
-
-{% block extra_styles %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fix Session — LaunchSafe</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/common.css">
 <style>
   #screen-fix {
     min-height: calc(100vh - 65px);
@@ -49,7 +54,7 @@
   .event.warn .kind { color: var(--orange); }
   .event.error { border-left-color: var(--red); }
   .event.error .kind { color: var(--red); }
-  
+
   .event .branch {
     font-family: var(--mono); font-size: 9px; padding: 1px 6px;
     border: 1px solid var(--border2); border-radius: 3px;
@@ -64,9 +69,8 @@
     margin-bottom: 20px;
   }
 
-  /* Results styling */
   #fix-results { display: none; }
-  
+
   .review-card {
     background: var(--bg2); border: 1px solid var(--border); border-radius: 12px;
     padding: 20px; margin-bottom: 24px;
@@ -80,7 +84,7 @@
   .review-notes { font-size: 14px; color: var(--muted); margin-bottom: 12px; }
   .review-warnings ul { padding-left: 20px; font-size: 13px; color: var(--orange); margin-bottom: 12px; }
   .review-conflicts ul { padding-left: 20px; font-size: 13px; color: var(--red); }
-  
+
   .group-card {
     background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
     margin-bottom: 20px; overflow: hidden;
@@ -90,14 +94,14 @@
   }
   .group-header h3 { font-family: var(--mono); font-size: 14px; margin-bottom: 4px; color: var(--accent); }
   .group-header p { font-size: 13px; color: var(--text); }
-  
+
   .patch-item {
     padding: 20px; border-bottom: 1px solid var(--border2);
   }
   .patch-item:last-child { border-bottom: none; }
   .patch-path { font-family: var(--mono); font-size: 12px; color: var(--text); margin-bottom: 8px; font-weight: 500; }
   .patch-explanation { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
-  
+
   .diff-block {
     background: #0b0c0e; border: 1px solid var(--border2); border-radius: 8px;
     font-family: var(--mono); font-size: 12px; padding: 16px; overflow-x: auto;
@@ -106,14 +110,19 @@
   .diff-add { color: #06d6a0; background: rgba(6, 214, 160, 0.1); display: inline-block; width: 100%; }
   .diff-remove { color: #ff4d4d; background: rgba(255, 77, 77, 0.1); display: inline-block; width: 100%; }
   .diff-header { color: #4cc9f0; display: inline-block; width: 100%; }
-  
+
   .action-row {
     margin-top: 30px; display: flex; justify-content: flex-end; gap: 12px;
   }
 </style>
-{% endblock %}
-
-{% block content %}
+</head>
+<body>
+<nav>
+  <a href="/" class="logo">LaunchSafe</a>
+  <div class="nav-right">
+    <span class="nav-badge">v0.1 · Python + FastAPI</span>
+  </div>
+</nav>
 <section id="screen-fix">
   <div class="fix-header fadein">
     <h2>Fix Agent Session</h2>
@@ -141,197 +150,15 @@
       <div class="review-warnings" id="review-warnings" style="display:none;"></div>
       <div class="review-conflicts" id="review-conflicts" style="display:none;"></div>
     </div>
-    
+
     <div id="groups-container"></div>
-    
+
     <div class="action-row">
-      <a href="/report/{{ scan_id }}" class="btn-ghost">Back to Report</a>
+      <a id="back-to-report" href="#" class="btn-ghost">Back to Report</a>
       <button class="btn-primary" onclick="alert('Applying patches via GitHub API / local diff tool is coming soon!')">Apply Fixes</button>
     </div>
   </div>
 </section>
-{% endblock %}
-
-{% block scripts %}
-<script>
-  const FIX_ID = "{{ fix_id }}";
-
-  const startedAt = Date.now();
-  let pollInterval = setInterval(poll, 600);
-  let tickInterval = setInterval(tick, 1000);
-  let lastSeq = 0;
-  const allEvents = [];
-
-  function tick() {
-    const s = Math.round((Date.now() - startedAt) / 1000);
-    document.getElementById('elapsed').textContent = s + 's';
-  }
-
-  function renderEventRow(ev) {
-    const row = document.createElement('div');
-    row.className = 'event ' + ev.kind;
-    const branch = ev.branch || 'fix';
-    row.innerHTML =
-      `<span class="t">${ev.t}s</span>` +
-      `<span class="branch b-${branch}">${branch}</span>` +
-      `<span class="kind">${ev.kind}</span>` +
-      `<span class="msg"></span>`;
-    row.querySelector('.msg').textContent = ev.text || '';
-    return row;
-  }
-
-  function renderEvents(events) {
-    if (!events || events.length === 0) return;
-    const list = document.getElementById('events-list');
-    const atBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 20;
-    for (const ev of events) {
-      if (ev.seq && ev.seq <= lastSeq) continue;
-      allEvents.push(ev);
-      list.appendChild(renderEventRow(ev));
-      if (ev.seq) lastSeq = ev.seq;
-    }
-    if (atBottom) list.scrollTop = list.scrollHeight;
-  }
-
-  function formatDiff(diffText) {
-    if (!diffText) return 'No diff available.';
-    const lines = diffText.split('\n');
-    return lines.map(line => {
-      if (line.startsWith('+')) {
-        return `<span class="diff-add">${escapeHtml(line)}</span>`;
-      } else if (line.startsWith('-')) {
-        return `<span class="diff-remove">${escapeHtml(line)}</span>`;
-      } else if (line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++')) {
-        return `<span class="diff-header">${escapeHtml(line)}</span>`;
-      }
-      return escapeHtml(line);
-    }).join('\n');
-  }
-
-  function escapeHtml(unsafe) {
-    return unsafe
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
-  }
-
-  function renderResults(data) {
-    const review = data.review || {};
-    const patches = data.patches || [];
-    
-    document.getElementById('working').style.display = 'none';
-    document.getElementById('events-panel').style.display = 'none';
-    document.getElementById('fix-results').style.display = 'block';
-    
-    // Render Review
-    const statusEl = document.getElementById('review-status');
-    if (review.approved) {
-      statusEl.innerHTML = `<span class="status-approved">Patches Approved & Conflict-Free</span>`;
-    } else {
-      statusEl.innerHTML = `<span class="status-warning">Review Needed</span>`;
-    }
-    document.getElementById('review-notes').textContent = review.notes || '';
-    
-    if (review.warnings && review.warnings.length > 0) {
-      const wEl = document.getElementById('review-warnings');
-      wEl.style.display = 'block';
-      wEl.innerHTML = '<strong>Warnings:</strong><ul>' + review.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('') + '</ul>';
-    }
-    
-    if (review.conflicts && review.conflicts.length > 0) {
-      const cEl = document.getElementById('review-conflicts');
-      cEl.style.display = 'block';
-      cEl.innerHTML = '<strong>Conflicts:</strong><ul>' + review.conflicts.map(c => `<li>${escapeHtml(c)}</li>`).join('') + '</ul>';
-    }
-
-    // Render Patches
-    const container = document.getElementById('groups-container');
-    container.innerHTML = '';
-    
-    for (const group of patches) {
-      const gCard = document.createElement('div');
-      gCard.className = 'group-card';
-      
-      const head = document.createElement('div');
-      head.className = 'group-header';
-      head.innerHTML = `<h3>${escapeHtml(group.group_id)}</h3><p>${escapeHtml(group.notes || '')}</p>`;
-      gCard.appendChild(head);
-      
-      const pList = group.patches || [];
-      for (const p of pList) {
-        const pItem = document.createElement('div');
-        pItem.className = 'patch-item';
-        pItem.innerHTML = `
-          <div class="patch-path">${escapeHtml(p.path)}</div>
-          <div class="patch-explanation">${escapeHtml(p.explanation)}</div>
-          <div class="diff-block">${formatDiff(p.diff)}</div>
-        `;
-        gCard.appendChild(pItem);
-      }
-      
-      container.appendChild(gCard);
-    }
-  }
-
-  async function poll() {
-    let data;
-    try {
-      const res = await fetch('/fix-status/' + FIX_ID);
-      data = await res.json();
-    } catch (e) { return; }
-    
-    if (data.events) {
-      renderEvents(data.events);
-    }
-
-    if (data.error) {
-      const banner = document.getElementById('error-banner');
-      banner.style.display = 'block';
-      banner.textContent = 'Fix agent error: ' + data.error;
-      document.getElementById('working').style.display = 'none';
-      clearInterval(pollInterval);
-      clearInterval(tickInterval);
-      return;
-    }
-
-    const working = document.getElementById('working-label');
-    const st = document.getElementById('status-label');
-    if (data.status === 'running') {
-      if (st && st.textContent.indexOf('Initializing') !== -1) {
-        st.innerHTML = 'In progress <span class="elapsed" id="elapsed">0s</span>';
-      }
-      if (data.events && data.events.length) {
-        const last = data.events[data.events.length - 1];
-        const b = String(last.branch || 'fix');
-        if (b === 'fix-planner') {
-          working.textContent = 'Planning fix batches…';
-        } else if (b === 'fix-reviewer') {
-          working.textContent = 'Reviewing generated patches…';
-        } else if (b === 'fix' && (last.text || '').indexOf('Loading') !== -1) {
-          working.textContent = 'Loading scan context…';
-        } else {
-          let short = b;
-          while (short.startsWith('fix-')) short = short.slice(4);
-          working.textContent = 'Generating patches — ' + short + '…';
-        }
-      } else {
-        working.textContent = 'Starting fix agent…';
-      }
-    }
-
-    if (data.status === 'done') {
-      clearInterval(pollInterval);
-      clearInterval(tickInterval);
-      document.getElementById('status-label').innerHTML =
-        'Complete <span class="elapsed">' +
-        Math.round((Date.now() - startedAt) / 1000) + 's</span>';
-      
-      renderResults(data);
-    }
-  }
-
-  poll();
-</script>
-{% endblock %}
+<script type="module" src="/src/fix.ts"></script>
+</body>
+</html>

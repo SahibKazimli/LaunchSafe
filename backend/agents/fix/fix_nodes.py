@@ -48,21 +48,21 @@ def _resolve_target_files_for_group(
     """Merge planner targets and finding locations into canonical file keys."""
     keys: list[str] = []
     seen: set[str] = set()
-    for t in raw_targets:
-        k = resolve_path_to_canonical_key(t, files)
-        if k and k not in seen:
-            keys.append(k)
-            seen.add(k)
+    for target in raw_targets:
+        key = resolve_path_to_canonical_key(target, files)
+        if key and key not in seen:
+            keys.append(key)
+            seen.add(key)
     for finding in group_findings:
-        k = resolve_path_to_canonical_key(finding.get("location", ""), files)
-        if k and k not in seen:
-            keys.append(k)
-            seen.add(k)
+        key = resolve_path_to_canonical_key(finding.get("location", ""), files)
+        if key and key not in seen:
+            keys.append(key)
+            seen.add(key)
     if not keys and group_findings:
-        for k in infer_paths_from_finding_text(group_findings, files):
-            if k not in seen:
-                keys.append(k)
-                seen.add(k)
+        for key in infer_paths_from_finding_text(group_findings, files):
+            if key not in seen:
+                keys.append(key)
+                seen.add(key)
     return keys
 
 
@@ -88,8 +88,8 @@ def _finding_touches_target_files(
     if not target_keys:
         return False
     key_set = set(target_keys)
-    k = resolve_path_to_canonical_key(finding.get("location", ""), files)
-    if k in key_set:
+    key = resolve_path_to_canonical_key(finding.get("location", ""), files)
+    if key in key_set:
         return True
     for inf in infer_paths_from_finding_text([finding], files):
         if inf in key_set:
@@ -97,16 +97,28 @@ def _finding_touches_target_files(
     return False
 
 
+def _report_index_for_finding(finding: dict, report_full: list[dict]) -> str:
+    for idx, group_finding in enumerate(report_full):
+        if not isinstance(group_finding, dict):
+            continue
+        if finding.get("title") == group_finding.get("title") and finding.get("location") == group_finding.get("location"):
+            return str(idx)
+    return "?"
+
+
 def _format_findings_for_patch_prompt(
     primary: list[dict],
     doc_only: list[dict],
+    report_full: list[dict] | None = None,
 ) -> str:
     """Separate repo-backed findings from doc-only / no-file noise for the patch LLM."""
+    rf = report_full or []
     chunks: list[str] = []
     if primary:
         chunks.append(
             "\n".join(
-                f"- ({f.get('severity', '?')}) {f.get('title', '?')} "
+                f"- [report #{_report_index_for_finding(f, rf)}] "
+                f"({f.get('severity', '?')}) {f.get('title', '?')} "
                 f"@ {f.get('location', '?')}\n"
                 f"  Description: {(f.get('description', '') or '')[:300]}\n"
                 f"  Suggested fix: {(f.get('fix', '') or '')[:400]}"
@@ -120,7 +132,8 @@ def _format_findings_for_patch_prompt(
             "only fix the files in ORIGINAL FILES above. You may mention them "
             "in PatchResult.notes:\n"
             + "\n".join(
-                f"- ({f.get('severity', '?')}) {f.get('title', '?')} "
+                f"- [report #{_report_index_for_finding(f, rf)}] "
+                f"({f.get('severity', '?')}) {f.get('title', '?')} "
                 f"@ {f.get('location', '?')}"
                 for f in doc_only
             )
@@ -156,6 +169,62 @@ def _batch_has_substantive_patches(patch_results: list[dict]) -> bool:
     for pr in patch_results:
         for p in pr.get("patches") or []:
             if isinstance(p, dict) and _patch_dict_is_substantive(p):
+                return True
+    return False
+
+
+_SEVERITY_FULL_FILE = frozenset({"medium", "high", "critical"})
+
+
+def _format_full_report_context(sess: dict[str, Any]) -> str:
+    """Full-scan report text so patch LLM aligns with audit, not ad-hoc edits."""
+    lines = [
+        "## Full audit report (entire scan — use to align code changes with reported issues)",
+        f"Grade: {sess.get('report_grade', '?')}",
+        f"Overall risk: {sess.get('report_overall_risk', '')}",
+        f"Executive summary: {sess.get('report_summary', '')}",
+    ]
+    top = sess.get("report_top_fixes") or []
+    if top:
+        lines.append("Top fixes from synthesize:")
+        for item in top[:12]:
+            lines.append(f"  - {item}")
+    full = sess.get("report_findings_full") or []
+    lines.append(f"\nAll {len(full)} finding(s) on this scan (index matches report order):")
+    for i, f in enumerate(full):
+        if not isinstance(f, dict):
+            continue
+        sev = f.get("severity", "?")
+        lines.append(
+            f"  [{i}] ({sev}) {f.get('title', '')} @ {f.get('location', '')}"
+        )
+        desc = (f.get("description") or "").strip()
+        if desc:
+            lines.append(f"      Detail: {desc[:280]}")
+        fx = (f.get("fix") or "").strip()
+        if fx:
+            lines.append(f"      Report remediation: {fx[:400]}")
+    text = "\n".join(lines)
+    cap = 32_000
+    if len(text) > cap:
+        return text[:cap] + "\n...[report context truncated]\n"
+    return text
+
+
+def _file_has_medium_plus_finding(
+    matched_path: str,
+    excerpt_findings: list[dict],
+    files: dict[str, str],
+) -> bool:
+    """Medium+ findings on this path → always include full ingested file in prompt."""
+    for f in excerpt_findings:
+        if str(f.get("severity") or "").lower() not in _SEVERITY_FULL_FILE:
+            continue
+        k = resolve_path_to_canonical_key(f.get("location", ""), files)
+        if k == matched_path:
+            return True
+        for inf in infer_paths_from_finding_text([f], files):
+            if inf == matched_path:
                 return True
     return False
 
@@ -273,11 +342,11 @@ async def plan_fixes_node(state: dict[str, Any]) -> dict[str, Any]:
 
     # Build the findings summary for the LLM
     finding_lines = []
-    for i, f in enumerate(findings):
+    for idx, finding in enumerate(findings):
         finding_lines.append(
-            f"[{i}] ({f.get('severity', '?')}) {f.get('title', '?')} "
-            f"@ {f.get('location', '?')}\n"
-            f"    fix: {(f.get('fix', '') or '')[:200]}"
+            f"[{idx}] ({finding.get('severity', '?')}) {finding.get('title', '?')} "
+            f"@ {finding.get('location', '?')}\n"
+            f"    fix: {(finding.get('fix', '') or '')[:200]}"
         )
 
     # Also list available files
@@ -346,11 +415,20 @@ async def plan_fixes_node(state: dict[str, Any]) -> dict[str, Any]:
 
 _PATCH_SYSTEM = """\
 You are a senior security engineer applying fixes to production code.
-You receive a group of related security findings with original file contents.
+You receive the **full audit report** plus a **focus group** of findings and
+the original file contents. Implement what the report asks for — do not improvise
+by deleting large blocks of logic.
 
 Rules:
   - Make the MINIMAL change that fixes the issue in each file.
   - Preserve ALL existing functionality. Do NOT refactor unrelated code.
+  - **Do NOT “fix” by deleting** validation, bounds checks, `malloc`/`free`
+    pairs, error handling, `goto cleanup`, socket read loops, or `break` logic
+    unless the finding **explicitly** says that code is wrong or unreachable.
+    Prefer **adding** checks, tightening bounds, zeroing buffers, fixing
+    off-by-ones, or correcting a specific unsafe call — not removing the block.
+  - If the report says “add validation” or “harden memory,” **extend** the code;
+    do not strip the surrounding allocation/read path.
   - Preserve all comments and documentation unless they are the bug.
   - For each file you modify, provide:
       1. original_snippet: copy-paste a **contiguous** region **verbatim** from the
@@ -383,7 +461,9 @@ _PATCH_RETRY_TAIL = (
     "patched_snippet, and a unified diff for each file shown under "
     "ORIGINAL FILES. Apply the fix inside the excerpt you were given. "
     "If you change a bind/listen line, keep `sin_port`, `return`, and closing "
-    "`}` lines in the same snippet — do not delete them."
+    "`}` lines in the same snippet — do not delete them. "
+    "Never remove input validation or allocation blocks to “simplify” — fix "
+    "the vulnerability in place per the report’s remediation."
 )
 
 _PATCH_RETRY_TAIL_2 = (
@@ -428,6 +508,12 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
 
     all_results: list[dict] = []
 
+    from core import fix_store as _fs_fix
+
+    fix_sess = _fs_fix.get_fix_session(fix_id) or {}
+    report_context = _format_full_report_context(fix_sess)
+    report_full_list = list(fix_sess.get("report_findings_full") or [])
+
     for group in ordered:
         group_id = group["group_id"]
         label = group.get("label", group_id)
@@ -460,13 +546,17 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
         for path in target_keys:
             matched_path, content = find_file_content(path, files)
             if content:
+                cap = FIX_PROMPT_FULL_FILE_MAX_CHARS
+                if _file_has_medium_plus_finding(matched_path, excerpt_findings, files):
+                    # Always pass the full ingested file for medium+ issues on this path
+                    cap = max(cap, len(content) + 128)
                 file_sections.append(
                     build_excerpt_for_fix_prompt(
                         matched_path,
                         content,
                         excerpt_findings,
                         files,
-                        full_file_max_chars=FIX_PROMPT_FULL_FILE_MAX_CHARS,
+                        full_file_max_chars=cap,
                     ),
                 )
             else:
@@ -483,10 +573,12 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
 
         if code_findings:
             finding_text = _format_findings_for_patch_prompt(
-                code_findings, doc_only_findings,
+                code_findings, doc_only_findings, report_full_list,
             )
         else:
-            finding_text = _format_findings_for_patch_prompt(group_findings, [])
+            finding_text = _format_findings_for_patch_prompt(
+                group_findings, [], report_full_list,
+            )
 
         if has_file_content:
             files_text = "\n\n".join(file_sections)
@@ -503,10 +595,16 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
             )
 
         user_msg = (
+            f"{report_context}\n\n"
+            f"---\n"
+            f"## Your task (this fix group only)\n"
+            f"Implement patches that satisfy the **FINDINGS TO FIX** section below, "
+            f"using the **Report remediation** lines from the audit where present. "
+            f"Indices in brackets refer to the full report list above.\n\n"
             f"FIX GROUP: {group.get('label', group_id)}\n"
             f"Commit message: {group.get('commit_message', '')}\n"
             f"Risk level: {group.get('risk_level', 'medium')}\n\n"
-            f"FINDINGS TO FIX:\n{finding_text}\n\n"
+            f"FINDINGS TO FIX (group):\n{finding_text}\n\n"
             f"ORIGINAL FILES:\n{files_text}"
         )
 
@@ -521,7 +619,7 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
             if has_file_content and not _patch_result_has_body(result):
                 emit(
                     fix_id, "warn",
-                    f"{label}: patch model returned empty bodies — retry 1/2",
+                    f"{label}: patch model returned empty bodies — one retry",
                     branch=f"fix-{group_id}",
                 )
                 result = structured.invoke([

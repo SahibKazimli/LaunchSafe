@@ -194,10 +194,16 @@ async def start_fix(req: _StartFixRequest):
     fix_id = str(uuid.uuid4())[:8]
     _fs.create_fix_session(fix_id, req.scan_id, req.finding_indices)
     scan_for_fix = _ss.get_scan(req.scan_id) or {}
+    findings_full = list(scan_for_fix.get("findings") or [])
     _fs.update_fix_session(
         fix_id,
         snapshot_files=dict(scan_for_fix.get("_files") or {}),
         snapshot_finding_files=dict(scan_for_fix.get("finding_files") or {}),
+        report_findings_full=findings_full,
+        report_summary=str(scan_for_fix.get("summary") or ""),
+        report_grade=str(scan_for_fix.get("grade") or ""),
+        report_top_fixes=list(scan_for_fix.get("top_fixes") or []),
+        report_overall_risk=str(scan_for_fix.get("overall_risk") or ""),
     )
 
     asyncio.create_task(run_fix_session(fix_id, req.scan_id, req.finding_indices))

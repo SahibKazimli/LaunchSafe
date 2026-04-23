@@ -29,6 +29,11 @@ def create_fix_session(
         "started_at": None,
         "snapshot_files": None,
         "snapshot_finding_files": None,
+        "report_findings_full": [],
+        "report_summary": "",
+        "report_grade": "",
+        "report_top_fixes": [],
+        "report_overall_risk": "",
     }
     _store[fix_id] = record
     return record

@@ -48,6 +48,9 @@ Workflow:
 4. STOP reading when you have enough context — don't read every file.
 5. Return the RepoProfile. Set `hotspot_files` to the paths most worth
    deep-scanning in the next phase, ordered by scrutiny priority.
+6. You MUST include the `summary` field: 2-3 sentences on what the repo does
+   and its main security-relevant surfaces (do not use `overview` alone — the
+   schema expects `summary`).
 
 Each tool call costs ~2-4 seconds of inference round-trip, so batching is
 MUCH faster than a sequence of single reads. Target 2-3 total tool calls

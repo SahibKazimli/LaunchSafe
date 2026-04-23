@@ -17,6 +17,13 @@ from agents.llm import get_llm
 from agents.runtime_log import emit
 from core.config import SYNTH_MAX_TOKENS, SPEC_MAX_TOKENS
 from core import scan_store as _ss
+from core.finding_files import (
+    find_file_content,
+    infer_paths_from_finding_text,
+    merge_scan_files_for_fix,
+    resolve_path_to_canonical_key,
+    resolve_paths_for_findings,
+)
 
 from .fix_state import (
     FilePatch,
@@ -25,6 +32,45 @@ from .fix_state import (
     PatchResult,
     PatchReview,
 )
+
+
+def _resolve_target_files_for_group(
+    raw_targets: list[str],
+    group_findings: list[dict],
+    files: dict[str, str],
+) -> list[str]:
+    """Merge planner targets and finding locations into canonical file keys."""
+    keys: list[str] = []
+    seen: set[str] = set()
+    for t in raw_targets:
+        k = resolve_path_to_canonical_key(t, files)
+        if k and k not in seen:
+            keys.append(k)
+            seen.add(k)
+    for finding in group_findings:
+        k = resolve_path_to_canonical_key(finding.get("location", ""), files)
+        if k and k not in seen:
+            keys.append(k)
+            seen.add(k)
+    if not keys and group_findings:
+        for k in infer_paths_from_finding_text(group_findings, files):
+            if k not in seen:
+                keys.append(k)
+                seen.add(k)
+    return keys
+
+
+def _rewrite_plan_target_files(
+    groups: list[dict],
+    findings: list[dict],
+    files: dict[str, str],
+) -> None:
+    """Mutate each group's target_files in place to match real ``files`` keys."""
+    for group in groups:
+        idxs = group.get("finding_indices") or []
+        group_findings = [findings[i] for i in idxs if isinstance(i, int) and i < len(findings)]
+        raw = group.get("target_files") or []
+        group["target_files"] = _resolve_target_files_for_group(raw, group_findings, files)
 
 
 # Node 1: Load Context   
@@ -64,15 +110,33 @@ def load_context_node(state: dict[str, Any]) -> dict[str, Any]:
         # Default: all findings if none explicitly selected
         findings = all_findings
 
+    files = merge_scan_files_for_fix(fix_session, scan)
+
+    keys_preview = list(files.keys())[:5]
     emit(
         fix_id, "info",
         f"Loaded {len(findings)} findings from scan {scan_id}",
         branch="fix",
     )
+    emit(
+        fix_id,
+        "info",
+        f"Fix context: {len(files)} source file(s) "
+        f"(merged full repo + finding_files bundle)"
+        + (f"; sample keys: {keys_preview}" if keys_preview else ""),
+        branch="fix",
+    )
+    if not files:
+        emit(
+            fix_id,
+            "warn",
+            "No source files in fix context — patch generation will not have file bodies.",
+            branch="fix",
+        )
 
     return {
         "findings": findings,
-        "files": scan.get("_files", {}),  # stashed during scan
+        "files": files,
         "repo_profile": scan.get("repo_profile", {}),
         "target": scan.get("target", "the repository"),
     }
@@ -133,11 +197,20 @@ async def plan_fixes_node(state: dict[str, Any]) -> dict[str, Any]:
     files = state.get("files", {})
     file_list = "\n".join(f"  - {p} ({len(c)} bytes)" for p, c in files.items())
 
+    resolved_lines = resolve_paths_for_findings(findings, files)
+    resolved_block = ""
+    if resolved_lines:
+        resolved_block = (
+            "\n\nRESOLVED_REPO_PATHS (prefer these exact paths in target_files):\n"
+            + "\n".join(f"  - {p}" for p in resolved_lines)
+        )
+
     user_msg = (
         f"Target: {state.get('target', '?')}\n\n"
         f"FINDINGS ({len(findings)}):\n"
         + "\n".join(finding_lines)
         + f"\n\nAVAILABLE FILES ({len(files)}):\n{file_list}"
+        + resolved_block
     )
 
     try:
@@ -152,11 +225,14 @@ async def plan_fixes_node(state: dict[str, Any]) -> dict[str, Any]:
         # Fallback: one group per finding
         groups = []
         for i, f in enumerate(findings):
+            canon = resolve_path_to_canonical_key(f.get("location", ""), files)
+            raw = (f.get("location", "") or "").split(":")[0].strip()
+            tgt = [canon] if canon else ([raw] if raw else [])
             groups.append(FixGroup(
                 group_id=f"fix-{i}",
                 label=f.get("title", f"Fix {i}")[:60],
                 finding_indices=[i],
-                target_files=[f.get("location", "").split(":")[0]],
+                target_files=tgt,
                 risk_level="medium",
                 commit_message=f"fix: {f.get('title', 'security fix')[:50]}",
             ))
@@ -166,13 +242,16 @@ async def plan_fixes_node(state: dict[str, Any]) -> dict[str, Any]:
             notes="Fallback plan — LLM planning failed, one group per finding.",
         )
 
+    plan_dict = plan.model_dump()
+    _rewrite_plan_target_files(plan_dict["groups"], findings, files)
+
     emit(
         fix_id, "branch_done",
         f"Fix plan: {len(plan.groups)} groups, order: {plan.execution_order}",
         branch="fix-planner",
     )
 
-    return {"fix_plan": plan.model_dump()}
+    return {"fix_plan": plan_dict}
 
 
 # ── Node 3: Generate Patches ─────────────────────────────────────────
@@ -196,25 +275,6 @@ Rules:
   - If no file content was provided for a finding, skip it and note why
     in the PatchResult.notes field. Do NOT make up code.
 """
-
-def _find_file_content(path: str, files: dict[str, str]) -> tuple[str, str]:
-    """Find file content by path, handling zip root prefixes and varying slashes."""
-    if not path:
-        return "", ""
-    if path in files:
-        return path, files[path]
-        
-    path_suffix = "/" + path.lstrip("/")
-    for k, v in files.items():
-        if ("/" + k).endswith(path_suffix) or path_suffix.endswith("/" + k):
-            return k, v
-            
-    path_lower = path_suffix.lower()
-    for k, v in files.items():
-        if ("/" + k).lower().endswith(path_lower):
-            return k, v
-            
-    return path, ""
 
 
 def _make_diff(path: str, original: str, patched: str) -> str:
@@ -267,23 +327,15 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
             if idx < len(findings):
                 group_findings.append(findings[idx])
 
-        # Gather the relevant file contents using fuzzy path matching
-        target_files = group.get("target_files", [])
-
-        # If target_files is empty, infer from finding locations
-        if not target_files:
-            seen = set()
-            for finding in group_findings:
-                loc = finding.get("location", "")
-                path_part = loc.split(":")[0].strip() if loc else ""
-                if path_part and path_part not in seen:
-                    target_files.append(path_part)
-                    seen.add(path_part)
+        raw_targets = list(group.get("target_files") or [])
+        target_keys = _resolve_target_files_for_group(
+            raw_targets, group_findings, files,
+        )
 
         file_sections = []
         missing_files = []
-        for path in target_files:
-            matched_path, content = _find_file_content(path, files)
+        for path in target_keys:
+            matched_path, content = find_file_content(path, files)
             if content:
                 snippet = content[:15_000]
                 if len(content) > 15_000:
@@ -313,8 +365,16 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
         if has_file_content:
             files_text = "\n\n".join(file_sections)
         else:
-            missing_list = ", ".join(target_files) if target_files else "unknown"
-            files_text = f"(File content not found for: {missing_list}. Skip this group and note in PatchResult.notes.)"
+            hint_parts = list(raw_targets) + [f.get("location", "") for f in group_findings]
+            cleaned = {h for h in hint_parts if h and str(h).strip().lower() not in ("unknown", "?", "n/a")}
+            missing_list = ", ".join(sorted(cleaned)) if cleaned else (
+                "no matching repo path (empty or non-path locations); "
+                "narrative text did not match any file key"
+            )
+            files_text = (
+                f"(File content not found for: {missing_list}. "
+                "Skip this group and note in PatchResult.notes.)"
+            )
 
         user_msg = (
             f"FIX GROUP: {group.get('label', group_id)}\n"

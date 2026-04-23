@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 Exposure = Literal["production", "internal", "test", "example", "doc"]
 
@@ -374,4 +374,15 @@ class RepoProfile(BaseModel):
             "layer, IaC, CI/CD workflows, files handling user input."
         ),
     )
-    summary: str = Field(description="2-3 sentence description of the app and its headline risk surface")
+    summary: str = Field(
+        default="",
+        description="2-3 sentence description of the app and its headline risk surface",
+        validation_alias=AliasChoices("summary", "overview", "description"),
+    )
+
+    @model_validator(mode="after")
+    def _ensure_summary(self) -> RepoProfile:
+        """LLMs often emit ``overview``; aliases cover that. Fall back to ``stack``."""
+        if not (self.summary or "").strip() and (self.stack or "").strip():
+            return self.model_copy(update={"summary": self.stack})
+        return self

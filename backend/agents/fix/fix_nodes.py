@@ -272,8 +272,14 @@ Rules:
   - Preserve ALL existing functionality. Do NOT refactor unrelated code.
   - Preserve all comments and documentation unless they are the bug.
   - For each file you modify, provide:
-      1. original_snippet: the exact vulnerable section (5-10 lines context)
-      2. patched_snippet: drop-in replacement with the fix applied
+      1. original_snippet: copy-paste a **contiguous** region **verbatim** from the
+         file (include 3–8 lines before and after the bug). It must be an **exact**
+         substring of the source, not a summary.
+      2. patched_snippet: the **same** region after your edit: **every** line that
+         stays must appear **unchanged**. Do NOT drop assignments, returns, ports,
+         braces `}`, or closing logic that still belongs in that region. If you only
+         change one line (e.g. `INADDR_ANY` → loopback), all other lines in the
+         snippet must match `original_snippet` except that line.
       3. diff: unified diff you generate from those two snippets
       4. explanation: one sentence — what changed and why it fixes it
   - Generate REAL code in the correct language. No pseudocode, no TODOs.
@@ -285,13 +291,18 @@ Rules:
     Do not return an empty patch list for files you were given.
   - If a block is labeled COMPLETE FILE, copy the vulnerable lines verbatim
     into original_snippet and show the same region with your fix in patched_snippet.
+  - **Sanity check:** `patched_snippet` must not have far fewer lines than
+    `original_snippet` unless you are deliberately deleting dead code called out
+    in the finding. Typical bind/config fixes change 1–2 lines only; keep the rest.
 """
 
 _PATCH_RETRY_TAIL = (
     "\n\nRetry / correction: Your previous answer had no real code changes. "
     "You MUST return FilePatch entries with non-empty original_snippet, "
     "patched_snippet, and a unified diff for each file shown under "
-    "ORIGINAL FILES. Apply the fix inside the excerpt you were given."
+    "ORIGINAL FILES. Apply the fix inside the excerpt you were given. "
+    "If you change a bind/listen line, keep `sin_port`, `return`, and closing "
+    "`}` lines in the same snippet — do not delete them."
 )
 
 

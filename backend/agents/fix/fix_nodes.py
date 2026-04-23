@@ -16,6 +16,7 @@ from typing import Any
 from agents.llm import get_llm
 from agents.runtime_log import emit
 from core.config import (
+    FIX_GROUP_MAX_FILES,
     FIX_PATCH_MAX_TOKENS,
     FIX_PLAN_MAX_TOKENS,
     FIX_PROMPT_FULL_FILE_MAX_CHARS,
@@ -38,6 +39,110 @@ from .fix_state import (
     PatchResult,
     PatchReview,
 )
+
+from agents.prompts.fix_prompts import (
+    PATCH_RETRY_TAIL as _PATCH_RETRY_TAIL,
+    PATCH_RETRY_TAIL_2 as _PATCH_RETRY_TAIL_2,
+    PATCH_RETRY_TRUNCATION as _PATCH_RETRY_TRUNCATION,
+    PATCH_SYSTEM as _PATCH_SYSTEM,
+    PLAN_SYSTEM as _PLAN_SYSTEM,
+    REVIEW_SYSTEM as _REVIEW_SYSTEM,
+)
+
+
+def _expand_target_keys_for_group(
+    group_findings: list[dict],
+    files: dict[str, str],
+    base_keys: list[str],
+    max_files: int,
+) -> list[str]:
+    """Union planner targets with every path resolved from the group's findings.
+
+    The planner often lists one file while other findings in the same batch map
+    elsewhere — that starves ``api-security``-style groups of the routes they need.
+    """
+    merged: list[str] = []
+    seen: set[str] = set()
+    for k in base_keys:
+        if k in files and k not in seen:
+            merged.append(k)
+            seen.add(k)
+        if len(merged) >= max_files:
+            return merged
+    for k in resolve_paths_for_findings(group_findings, files):
+        if k in files and k not in seen:
+            merged.append(k)
+            seen.add(k)
+        if len(merged) >= max_files:
+            break
+    return merged
+
+
+def _finding_blob_for_hints(findings: list[dict]) -> str:
+    return " ".join(
+        f"{f.get('title', '')} {f.get('description', '')} {f.get('fix', '')}"
+        for f in findings
+        if isinstance(f, dict)
+    ).lower()
+
+
+def _supplement_api_like_targets(
+    files: dict[str, str],
+    group_findings: list[dict],
+    keys: list[str],
+    max_files: int,
+) -> list[str]:
+    """If findings are API-ish but paths are vague, add likely entrypoint files."""
+    if len(keys) >= min(5, max_files):
+        return keys
+    blob = _finding_blob_for_hints(group_findings)
+    if not any(
+        w in blob
+        for w in (
+            "api",
+            "http",
+            "rest",
+            "endpoint",
+            "route",
+            "graphql",
+            "injection",
+            "cors",
+            "rate limit",
+            "csrf",
+            "mass assignment",
+            "idor",
+        )
+    ):
+        return keys
+    hints = (
+        "routes",
+        "router",
+        "/api/",
+        "handler",
+        "controller",
+        "views",
+        "app.py",
+        "main.py",
+        "server",
+        "fastapi",
+        "flask",
+        "express",
+    )
+    out: list[str] = list(dict.fromkeys(keys))
+    seen = set(out)
+    scored: list[tuple[int, str]] = []
+    for path in files:
+        low = path.replace("\\", "/").lower()
+        score = sum(1 for h in hints if h in low)
+        if score:
+            scored.append((score, path))
+    for _score, path in sorted(scored, key=lambda x: (-x[0], len(x[1]), x[1])):
+        if path not in seen:
+            out.append(path)
+            seen.add(path)
+        if len(out) >= max_files:
+            break
+    return out
 
 
 def _resolve_target_files_for_group(
@@ -142,20 +247,14 @@ def _format_findings_for_patch_prompt(
 
 
 def _patch_dict_is_substantive(patch: dict) -> bool:
-    """True if a patch has a real change (snippets differ or diff has +/- lines)."""
+    """True only when before/after snippets both exist and actually differ.
+
+    We do **not** trust a model-written ``diff`` alone: the model often emits
+    ``---``/``+++``/``@@`` headers plus context lines with no real +/- edits.
+    """
     o = (patch.get("original_snippet") or "").strip()
     s = (patch.get("patched_snippet") or "").strip()
-    d = (patch.get("diff") or "").strip()
-    if o and s and o != s:
-        return True
-    for line in d.splitlines():
-        if line.startswith("+++ ") or line.startswith("--- ") or line.startswith("@@"):
-            continue
-        if line.startswith("+") and not line.startswith("+++"):
-            return True
-        if line.startswith("-") and not line.startswith("---"):
-            return True
-    return False
+    return bool(o and s and o != s)
 
 
 def _naive_brace_depth(text: str) -> int:
@@ -203,17 +302,10 @@ def _patch_looks_incomplete_or_truncated(patch: dict) -> bool:
     return False
 
 
-def _patch_result_has_body(result: PatchResult) -> bool:
-    for p in result.patches:
-        if _patch_dict_is_substantive(p.model_dump()):
-            return True
-    return False
-
-
 def _batch_has_substantive_patches(patch_results: list[dict]) -> bool:
-    for pr in patch_results:
-        for p in pr.get("patches") or []:
-            if isinstance(p, dict) and _patch_dict_is_substantive(p):
+    for patch_result in patch_results:
+        for patch in patch_result.get("patches") or []:
+            if isinstance(patch, dict) and _patch_dict_is_substantive(patch):
                 return True
     return False
 
@@ -236,17 +328,18 @@ def _format_full_report_context(sess: dict[str, Any]) -> str:
             lines.append(f"  - {item}")
     full = sess.get("report_findings_full") or []
     lines.append(f"\nAll {len(full)} finding(s) on this scan (index matches report order):")
-    for i, f in enumerate(full):
-        if not isinstance(f, dict):
+    for idx, group_finding in enumerate(full):
+        if not isinstance(group_finding, dict):
             continue
-        sev = f.get("severity", "?")
+        sev = group_finding.get("severity", "?")
         lines.append(
-            f"  [{i}] ({sev}) {f.get('title', '')} @ {f.get('location', '')}"
+            f"  [{idx}] ({sev}) {group_finding.get('title', '')} "
+            f"@ {group_finding.get('location', '')}"
         )
-        desc = (f.get("description") or "").strip()
+        desc = (group_finding.get("description") or "").strip()
         if desc:
             lines.append(f"      Detail: {desc[:280]}")
-        fx = (f.get("fix") or "").strip()
+        fx = (group_finding.get("fix") or "").strip()
         if fx:
             lines.append(f"      Report remediation: {fx[:400]}")
     text = "\n".join(lines)
@@ -262,13 +355,13 @@ def _file_has_medium_plus_finding(
     files: dict[str, str],
 ) -> bool:
     """Medium+ findings on this path → always include full ingested file in prompt."""
-    for f in excerpt_findings:
-        if str(f.get("severity") or "").lower() not in _SEVERITY_FULL_FILE:
+    for finding in excerpt_findings:
+        if str(finding.get("severity") or "").lower() not in _SEVERITY_FULL_FILE:
             continue
-        k = resolve_path_to_canonical_key(f.get("location", ""), files)
-        if k == matched_path:
+        key = resolve_path_to_canonical_key(finding.get("location", ""), files)
+        if key == matched_path:
             return True
-        for inf in infer_paths_from_finding_text([f], files):
+        for inf in infer_paths_from_finding_text([finding], files):
             if inf == matched_path:
                 return True
     return False
@@ -344,26 +437,6 @@ def load_context_node(state: dict[str, Any]) -> dict[str, Any]:
 
 
 # Node 2: Plan Fixes 
-
-_PLAN_SYSTEM = """\
-You are a senior security engineer planning a coordinated fix session.
-You receive a list of security findings from an audit. Your job is to
-group them into logical fix batches that can be applied together.
-
-Rules:
-  - Findings in the SAME FILE should be in the same group.
-  - Related findings across files (e.g. auth config + auth middleware)
-    should be grouped together if they share a logical concern.
-  - Order groups by dependency: config/dependency fixes first, then
-    code that reads the config.
-  - Each group gets a risk_level:
-      "low"    — formatting, headers, documentation
-      "medium" — logic changes, input validation
-      "high"   — auth/payment/crypto/session changes
-  - Each group gets a conventional commit message.
-  - Keep groups focused. 2-6 findings per group is typical.
-    Don't put everything in one mega-group.
-"""
 
 
 async def plan_fixes_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -445,10 +518,16 @@ async def plan_fixes_node(state: dict[str, Any]) -> dict[str, Any]:
 
     plan_dict = plan.model_dump()
     _rewrite_plan_target_files(plan_dict["groups"], findings, files)
+    # Planner sometimes omits execution_order; default to declared group order.
+    if not plan_dict.get("execution_order") and plan_dict.get("groups"):
+        plan_dict["execution_order"] = [
+            g["group_id"] for g in plan_dict["groups"] if g.get("group_id")
+        ]
 
     emit(
         fix_id, "branch_done",
-        f"Fix plan: {len(plan.groups)} groups, order: {plan.execution_order}",
+        f"Fix plan: {len(plan_dict['groups'])} groups, "
+        f"order: {plan_dict.get('execution_order', [])}",
         branch="fix-planner",
     )
 
@@ -456,78 +535,6 @@ async def plan_fixes_node(state: dict[str, Any]) -> dict[str, Any]:
 
 
 # ── Node 3: Generate Patches ─────────────────────────────────────────
-
-
-_PATCH_SYSTEM = """\
-You are a senior security engineer applying fixes to production code.
-You receive the **full audit report** plus a **focus group** of findings and
-the original file contents. Implement what the report asks for — do not improvise
-by deleting large blocks of logic.
-
-Rules:
-  - Make the MINIMAL change that fixes the issue in each file.
-  - Preserve ALL existing functionality. Do NOT refactor unrelated code.
-  - **Do NOT “fix” by deleting** validation, bounds checks, `malloc`/`free`
-    pairs, error handling, `goto cleanup`, socket read loops, or `break` logic
-    unless the finding **explicitly** says that code is wrong or unreachable.
-    Prefer **adding** checks, tightening bounds, zeroing buffers, fixing
-    off-by-ones, or correcting a specific unsafe call — not removing the block.
-  - If the report says “add validation” or “harden memory,” **extend** the code;
-    do not strip the surrounding allocation/read path.
-  - Preserve all comments and documentation unless they are the bug.
-  - For each file you modify, provide:
-      1. original_snippet: copy-paste a **contiguous** region **verbatim** from the
-         file (include 3–8 lines before and after the bug). It must be an **exact**
-         substring of the source, not a summary.
-      2. patched_snippet: the **same** region after your edit: **every** line that
-         stays must appear **unchanged**. Do NOT drop assignments, returns, ports,
-         braces `}`, or closing logic that still belongs in that region. If you only
-         change one line (e.g. `INADDR_ANY` → loopback), all other lines in the
-         snippet must match `original_snippet` except that line.
-      3. diff: unified diff you generate from those two snippets
-      4. explanation: one sentence — what changed and why it fixes it
-  - Generate REAL code in the correct language. No pseudocode, no TODOs.
-  - Include new imports in the patched_snippet if needed.
-  - If no file content was provided for a finding, skip it and note why
-    in the PatchResult.notes field. Do NOT make up code.
-  - When file content IS provided below, you MUST emit at least one FilePatch
-    per file with non-empty original_snippet, patched_snippet, and diff.
-    Do not return an empty patch list for files you were given.
-  - If a block is labeled COMPLETE FILE, copy the vulnerable lines verbatim
-    into original_snippet and show the same region with your fix in patched_snippet.
-  - **Sanity check:** `patched_snippet` must not have far fewer lines than
-    `original_snippet` unless you are deliberately deleting dead code called out
-    in the finding. Typical bind/config fixes change 1–2 lines only; keep the rest.
-  - **Completeness:** Every `patched_snippet` must be syntactically complete in
-    isolation: balanced `()` and `{}`, closed string literals, and terminated
-    statements (`;` where the language requires). Do not stop mid-`printf` or
-    mid-`if`.
-"""
-
-_PATCH_RETRY_TAIL = (
-    "\n\nRetry / correction: Your previous answer had no real code changes. "
-    "You MUST return FilePatch entries with non-empty original_snippet, "
-    "patched_snippet, and a unified diff for each file shown under "
-    "ORIGINAL FILES. Apply the fix inside the excerpt you were given. "
-    "If you change a bind/listen line, keep `sin_port`, `return`, and closing "
-    "`}` lines in the same snippet — do not delete them. "
-    "Never remove input validation or allocation blocks to “simplify” — fix "
-    "the vulnerability in place per the report’s remediation."
-)
-
-_PATCH_RETRY_TAIL_2 = (
-    "\n\nFinal attempt: Emit ONE FilePatch per file under ORIGINAL FILES. "
-    "Each patch must have original_snippet ≠ patched_snippet (real edit). "
-    "Ignore doc-only / policy findings in the list footer — they are not files."
-)
-
-_PATCH_RETRY_TRUNCATION = (
-    "\n\nYour last output was rejected as **truncated or structurally incomplete**: "
-    "unbalanced `()` / `{}`, or an **unterminated string** on the last line. "
-    "Reply with **complete** `patched_snippet` only — full `printf(\"...\");` lines, "
-    "full `if (...) { ... }` including any `break;` / `return` the original had. "
-    "Prefer the smallest edit (e.g. add `|| cmd_length > N` to an existing `if`)."
-)
 
 
 def _make_diff(path: str, original: str, patched: str) -> str:
@@ -590,6 +597,12 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
         target_keys = _resolve_target_files_for_group(
             raw_targets, group_findings, files,
         )
+        target_keys = _expand_target_keys_for_group(
+            group_findings, files, target_keys, FIX_GROUP_MAX_FILES,
+        )
+        target_keys = _supplement_api_like_targets(
+            files, group_findings, target_keys, FIX_GROUP_MAX_FILES,
+        )
 
         code_findings = [
             f for f in group_findings
@@ -651,6 +664,15 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
                 "Skip this group and note in PatchResult.notes.)"
             )
 
+        broad_path_hint = ""
+        if not code_findings:
+            broad_path_hint = (
+                "\n\n**Path hint:** Some findings here may not cite an exact file. "
+                "Search the ORIGINAL FILES for behavior matching the issue (routes, "
+                "handlers, middleware, validation) and patch there — do not skip "
+                "the group if source files are shown above."
+            )
+
         user_msg = (
             f"{report_context}\n\n"
             f"---\n"
@@ -663,7 +685,27 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
             f"Risk level: {group.get('risk_level', 'medium')}\n\n"
             f"FINDINGS TO FIX (group):\n{finding_text}\n\n"
             f"ORIGINAL FILES:\n{files_text}"
+            f"{broad_path_hint}"
         )
+
+        if not has_file_content:
+            emit(
+                fix_id, "branch_done",
+                f"{label}: skipped (no repo files for this group)",
+                branch=f"fix-{group_id}",
+            )
+            all_results.append(
+                PatchResult(
+                    group_id=group_id,
+                    patches=[],
+                    notes=(
+                        "Skipped: no matching source files in this scan for this group "
+                        "(docs/policy-only or paths that did not resolve). "
+                        "Address these findings manually or re-run with paths in locations."
+                    ),
+                ).model_dump(),
+            )
+            continue
 
         try:
             llm = get_llm(max_tokens=FIX_PATCH_MAX_TOKENS)
@@ -671,14 +713,13 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
             fallback_path = target_keys[0] if target_keys else "file"
 
             def _backfill_patch_diffs(res: PatchResult) -> None:
+                """Always derive unified diff from snippets (overwrites hollow LLM diffs)."""
                 for patch in res.patches:
-                    if not patch.diff and patch.original_snippet and patch.patched_snippet:
+                    o = patch.original_snippet or ""
+                    s = patch.patched_snippet or ""
+                    if o.strip() and s.strip():
                         use_path = (patch.path or "").strip() or fallback_path
-                        patch.diff = _make_diff(
-                            use_path,
-                            patch.original_snippet,
-                            patch.patched_snippet,
-                        )
+                        patch.diff = _make_diff(use_path, o, s)
 
             def _kept_patches_from_result(res: PatchResult) -> tuple[list[dict], list[dict]]:
                 """Return (substantive patches, kept patches that pass structural checks)."""
@@ -768,28 +809,7 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
     return {"patch_results": all_results}
 
 
-# Node 4: Review Patches 
-
-
-_REVIEW_SYSTEM = """\
-You are a senior code reviewer checking a batch of security patches
-before they are committed.
-
-Review the patches for:
-  1. CONFLICTS: Two patches editing the same lines differently.
-  2. REGRESSIONS: A fix that breaks something another patch assumes
-     (e.g. renaming a function that another patch calls).
-  3. MISSING IMPORTS: A patch uses a symbol not imported.
-  4. SYNTAX ERRORS: Obvious syntax problems in the patched code.
-  5. INCOMPLETE FIXES: A patch that addresses the symptom but not the
-     root cause.
-  6. EMPTY DIFFS: If a group claims a file but the diff has no + / - lines,
-     that is NOT safe to apply.
-
-Set approved=true only if there is at least one real code change to apply
-and the batch is safe. If every diff is empty or cosmetic, approved=false.
-Set approved=false and explain in conflicts/warnings if not.
-"""
+# Node 4: Review Patches
 
 
 async def review_patches_node(state: dict[str, Any]) -> dict[str, Any]:

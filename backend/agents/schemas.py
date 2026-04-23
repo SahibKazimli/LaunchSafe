@@ -357,11 +357,28 @@ class RepoProfile(BaseModel):
     stack: str = Field(description="one-sentence stack summary, e.g. 'FastAPI + React + Postgres on AWS via Terraform'")
     languages: list[str] = Field(default_factory=list)
     frameworks: list[str] = Field(default_factory=list)
-    has_iac: bool = Field(description="Terraform / CloudFormation / k8s / Pulumi present")
-    has_cicd: bool = Field(description=".github/workflows or similar CI/CD present")
-    has_auth: bool = Field(description="auth / session / JWT / OAuth code present")
-    has_payments: bool = Field(description="payment processor (Stripe, etc.) integrated")
-    has_user_data: bool = Field(description="app appears to store user PII")
+    # Booleans default False so structured output from models that omit keys
+    # (e.g. Gemini) still parses; recon prompt still asks for explicit values.
+    has_iac: bool = Field(
+        default=False,
+        description="Terraform / CloudFormation / k8s / Pulumi present",
+    )
+    has_cicd: bool = Field(
+        default=False,
+        description=".github/workflows or similar CI/CD present",
+    )
+    has_auth: bool = Field(
+        default=False,
+        description="auth / session / JWT / OAuth code present",
+    )
+    has_payments: bool = Field(
+        default=False,
+        description="payment processor (Stripe, etc.) integrated",
+    )
+    has_user_data: bool = Field(
+        default=False,
+        description="app appears to store user PII",
+    )
     entry_points: list[str] = Field(
         default_factory=list,
         description="file paths likely to be HTTP entry points or main() equivalents",

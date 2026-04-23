@@ -80,7 +80,7 @@ AI_SCAN_MAX_TOKENS: int     = _env_int("AI_SCAN_MAX_TOKENS", 1536)
 # Phase-2 fix graph (separate caps so patch generation can stay higher than plan/review)
 FIX_PLAN_MAX_TOKENS: int    = _env_int("FIX_PLAN_MAX_TOKENS", 1536)
 # Patch step needs a generous cap: structured FilePatch + snippets + diff fills fast.
-FIX_PATCH_MAX_TOKENS: int   = _env_int("FIX_PATCH_MAX_TOKENS", 8192)
+FIX_PATCH_MAX_TOKENS: int   = _env_int("FIX_PATCH_MAX_TOKENS", 12_288)
 FIX_REVIEW_MAX_TOKENS: int  = _env_int("FIX_REVIEW_MAX_TOKENS", 1536)
 # When an ingested file is at most this many characters, the fix prompt includes
 # the **entire** file (not an excerpt). Matches typical ingest cap.
@@ -88,6 +88,8 @@ FIX_PROMPT_FULL_FILE_MAX_CHARS: int = _env_int(
     "FIX_PROMPT_FULL_FILE_MAX_CHARS",
     200_000,
 )
+# Cap how many distinct files one fix group can load (planner + inferred paths).
+FIX_GROUP_MAX_FILES: int = _env_int("FIX_GROUP_MAX_FILES", 14)
 
 # Fewer files per ``select_hotspots`` → fewer follow-up reads / AI scans
 SELECT_HOTSPOT_MAX_FILES: int = _env_int("SELECT_HOTSPOT_MAX_FILES", 6)

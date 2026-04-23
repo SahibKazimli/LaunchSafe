@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.config import SYNTH_MAX_TOKENS
+from agents.prompts.executive_summary import EXECUTIVE_SUMMARY_SYSTEM
 from .runtime_log import emit
 from .schemas import AuditReport, ComplianceRef, Finding
 from tools.scanners import SEVERITY_DEFAULT_CVSS, infer_exposure_from_path
@@ -203,23 +204,7 @@ def _llm_summary(target: str, findings: list[Finding], branches: dict[str, int])
         )
     body = "\n".join(rendered)
 
-    system = (
-        "You are the lead security auditor writing the executive summary "
-        "of a startup security audit. The findings have already been "
-        "produced by specialist sub-agents and deduped. Do NOT invent new "
-        "findings. Keep `findings` EXACTLY as provided by the input "
-        "JSON below — copy the list verbatim into your response.\n\n"
-        "Your only original output is:\n"
-        "  - summary: 2-4 sentences for a non-technical founder. State "
-        "    the headline risk and what enterprise customers / regulators "
-        "    will care about. Plain English.\n"
-        "  - top_fixes: 3-5 imperative one-liners. What to do Monday "
-        "    morning, in priority order. Pull from the findings' `fix` "
-        "    fields.\n"
-        "  - overall_risk: one of critical / high / medium / low / minimal. "
-        "    Use the calibration anchors: any critical finding -> 'critical'; "
-        "    >=3 high or one critical-adjacent pattern -> 'high'; etc.\n"
-    )
+    system = EXECUTIVE_SUMMARY_SYSTEM
     user = (
         f"Target: {target}\n"
         f"Specialist coverage: {branches}\n"

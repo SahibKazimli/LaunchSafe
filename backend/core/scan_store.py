@@ -35,6 +35,7 @@ def create_scan(scan_id: str, target: str) -> dict[str, Any]:
         "top_fixes": [],
         "overall_risk": "",
         "repo_profile": None,
+        "finding_files": {},
     }
     _store[scan_id] = record
     return record

@@ -6,6 +6,7 @@ from __future__ import annotations
 from agents.runtime_log import emit
 from core import fix_store as _fs
 from core import scan_store as _ss
+from core.finding_files import merge_scan_files_for_fix
 
 
 async def run_fix_session(
@@ -40,6 +41,16 @@ async def run_fix_session(
             status="error",
             error=f"Scan {scan_id} is not complete (status: {scan.get('status')}).",
         )
+        return
+
+    files_blob = merge_scan_files_for_fix(session, scan)
+    if not files_blob:
+        msg = (
+            "This scan has no stashed source files (and no finding file bundle). "
+            "Re-run the scan, then try fix mode again."
+        )
+        _fs.update_fix_session(fix_id, status="error", error=msg)
+        emit(fix_id, "error", msg, branch="fix")
         return
 
     try:

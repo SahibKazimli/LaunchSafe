@@ -90,7 +90,7 @@ async def start_scan(
     if github_url.strip():
         try:
             files = await asyncio.to_thread(clone_github, github_url.strip())
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  
             _ss.update_scan(
                 scan_id,
                 status="error",
@@ -121,6 +121,10 @@ async def start_scan(
     if not files:
         files = _demo_files()
 
+    # Stash sources on the scan record immediately so fix mode always has
+    # file blobs even if orchestrator behavior changes later.
+    _ss.update_scan(scan_id, _files=files)
+
     asyncio.create_task(run_scan(scan_id, files))
     return {"scan_id": scan_id}
 
@@ -136,7 +140,7 @@ async def scan_status(scan_id: str, since: int = 0):
         profile = profile.model_dump()
 
     all_events = scan.get("events", [])
-    new_events = [e for e in all_events if e.get("seq", 0) > since]
+    new_events = [event for event in all_events if event.get("seq", 0) > since]
     if len(new_events) > EVENT_API_TAIL:
         new_events = new_events[-EVENT_API_TAIL:]
     last_seq = scan.get("event_seq", 0)
@@ -163,7 +167,7 @@ async def get_findings(scan_id: str, severity: str = "all"):
         return {"error": "not found"}
     findings = scan.get("findings", [])
     if severity != "all":
-        findings = [f for f in findings if f["severity"] == severity]
+        findings = [finding for finding in findings if finding["severity"] == severity]
     return {"findings": findings}
 
 
@@ -189,6 +193,12 @@ async def start_fix(req: _StartFixRequest):
 
     fix_id = str(uuid.uuid4())[:8]
     _fs.create_fix_session(fix_id, req.scan_id, req.finding_indices)
+    scan_for_fix = _ss.get_scan(req.scan_id) or {}
+    _fs.update_fix_session(
+        fix_id,
+        snapshot_files=dict(scan_for_fix.get("_files") or {}),
+        snapshot_finding_files=dict(scan_for_fix.get("finding_files") or {}),
+    )
 
     asyncio.create_task(run_fix_session(fix_id, req.scan_id, req.finding_indices))
     return {"fix_id": fix_id}
@@ -254,6 +264,8 @@ async def debug_fix(fix_id: str):
         ],
         "review_approved": (session.get("review") or {}).get("approved"),
         "review_notes": (session.get("review") or {}).get("notes"),
+        "snapshot_files_count": len(session.get("snapshot_files") or {}),
+        "snapshot_finding_files_count": len(session.get("snapshot_finding_files") or {}),
         "events": session.get("events", []),
     }
 
@@ -265,11 +277,16 @@ async def debug_scan(scan_id: str):
     if not scan:
         return {"error": "not found"}
     files = scan.get("_files", {})
+    ffb = scan.get("finding_files") or {}
+    findings = scan.get("findings", [])
     return {
         "status": scan.get("status"),
-        "finding_count": len(scan.get("findings", [])),
-        "findings_severity": [f.get("severity") for f in scan.get("findings", [])],
+        "finding_count": len(findings),
+        "findings_severity": [f.get("severity") for f in findings],
+        "finding_locations_sample": [f.get("location") for f in findings[:15]],
         "files_stashed": len(files),
+        "finding_files_bundle_count": len(ffb),
+        "finding_files_bundle_keys": list(ffb.keys())[:20],
         "file_keys": list(files.keys())[:20],
     }
 

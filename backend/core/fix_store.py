@@ -27,6 +27,8 @@ def create_fix_session(
         "events": [],
         "event_seq": 0,
         "started_at": None,
+        "snapshot_files": None,
+        "snapshot_finding_files": None,
     }
     _store[fix_id] = record
     return record

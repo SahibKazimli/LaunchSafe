@@ -20,6 +20,7 @@ from tools.scanners import (
     scan_secrets,
 )
 from core import scan_store as _ss
+from core.finding_files import build_finding_file_bundle
 
 
 async def run_scan(scan_id: str, files: dict[str, str]) -> None:
@@ -109,10 +110,12 @@ async def run_scan(scan_id: str, files: dict[str, str]) -> None:
             )
 
         score, grade = compute_score(report_findings)
+        finding_files = build_finding_file_bundle(files, report_findings)
         _ss.update_scan(
             scan_id,
             status="done",
             findings=report_findings,
+            finding_files=finding_files,
             score=score,
             grade=grade,
             summary=summary,
@@ -139,10 +142,12 @@ async def run_scan(scan_id: str, files: dict[str, str]) -> None:
                 branch="outer",
             )
             score, grade = compute_score(salvaged)
+            finding_files = build_finding_file_bundle(files, salvaged)
             _ss.update_scan(
                 scan_id,
                 status="done",
                 findings=salvaged,
+                finding_files=finding_files,
                 score=score,
                 grade=grade,
                 summary=(
@@ -186,12 +191,14 @@ async def _run_regex_fallback(scan_id: str, files: dict[str, str]) -> None:
         _ss.update_scan(scan_id, findings=list(all_findings))
 
     score, grade = compute_score(all_findings)
+    finding_files = build_finding_file_bundle(files, all_findings)
     _ss.update_scan(
         scan_id,
         status="done",
         score=score,
         grade=grade,
         findings=all_findings,
+        finding_files=finding_files,
         summary=(
             "Regex-only fallback scan (no ANTHROPIC_API_KEY set). "
             f"Found {len(all_findings)} issues across 6 modules."

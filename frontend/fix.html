@@ -102,14 +102,54 @@
   .patch-path { font-family: var(--mono); font-size: 12px; color: var(--text); margin-bottom: 8px; font-weight: 500; }
   .patch-explanation { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
 
+  /* One visual row per diff line; inner <code> keeps alignment without collapsing lines. */
   .diff-block {
-    background: #0b0c0e; border: 1px solid var(--border2); border-radius: 8px;
-    font-family: var(--mono); font-size: 12px; padding: 16px; overflow-x: auto;
-    white-space: pre; line-height: 1.5;
+    background: #0b0c0e;
+    border: 1px solid var(--border2);
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 0;
+    overflow-x: auto;
+    white-space: normal;
   }
-  .diff-add { color: #06d6a0; background: rgba(6, 214, 160, 0.1); display: inline-block; width: 100%; }
-  .diff-remove { color: #ff4d4d; background: rgba(255, 77, 77, 0.1); display: inline-block; width: 100%; }
-  .diff-header { color: #4cc9f0; display: inline-block; width: 100%; }
+  .diff-line {
+    display: block;
+    margin: 0;
+    min-height: 1.5em;
+    line-height: 1.5;
+    padding: 4px 12px 4px 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    border-left: 3px solid transparent;
+  }
+  .diff-line:last-child {
+    border-bottom: none;
+  }
+  .diff-code {
+    display: block;
+    white-space: pre;
+    overflow-x: auto;
+    margin: 0;
+    padding: 0;
+    font: inherit;
+    color: inherit;
+  }
+  .diff-line.diff-ctx { color: rgba(255, 255, 255, 0.5); }
+  .diff-line.diff-header {
+    color: #4cc9f0;
+    background: rgba(76, 201, 240, 0.06);
+    border-left-color: #4cc9f0;
+  }
+  .diff-line.diff-add {
+    color: #06d6a0;
+    background: rgba(6, 214, 160, 0.1);
+    border-left-color: #06d6a0;
+  }
+  .diff-line.diff-remove {
+    color: #ff4d4d;
+    background: rgba(255, 77, 77, 0.1);
+    border-left-color: #ff4d4d;
+  }
 
   .action-row {
     margin-top: 30px; display: flex; justify-content: flex-end; gap: 12px;

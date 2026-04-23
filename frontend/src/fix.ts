@@ -78,16 +78,22 @@ function escapeHtml(unsafe: string): string {
 function formatDiff(diffText: string): string {
   if (!diffText) return 'No diff available.';
   const lines = diffText.split('\n');
-  return lines.map(line => {
-    if (line.startsWith('+')) {
-      return `<span class="diff-add">${escapeHtml(line)}</span>`;
-    } else if (line.startsWith('-')) {
-      return `<span class="diff-remove">${escapeHtml(line)}</span>`;
-    } else if (line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++')) {
-      return `<span class="diff-header">${escapeHtml(line)}</span>`;
-    }
-    return escapeHtml(line);
-  }).join('\n');
+  return lines
+    .map((line) => {
+      let rowClass = 'diff-ctx';
+      if (line.startsWith('---') || line.startsWith('+++') || line.startsWith('@@')) {
+        rowClass = 'diff-header';
+      } else if (line.startsWith('+')) {
+        rowClass = 'diff-add';
+      } else if (line.startsWith('-')) {
+        rowClass = 'diff-remove';
+      }
+      // One block row per line so the layout is never dependent on <pre> / newline quirks in innerHTML.
+      return (
+        `<div class="diff-line ${rowClass}">` + `<code class="diff-code">${escapeHtml(line)}</code></div>`
+      );
+    })
+    .join('');
 }
 
 function renderResults(data: { review?: FixReview; patches?: PatchGroup[]; scan_id?: string }) {

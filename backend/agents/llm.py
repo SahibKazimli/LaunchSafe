@@ -4,18 +4,17 @@ Single place to swap between Gemini and Claude.  Every agent/tool that
 needs an LLM calls :func:`get_llm` instead of instantiating a provider
 directly.
 
-Provider selection order
-------------------------
-1. If ``LAUNCHSAFE_LLM_MODEL`` starts with ``gemini`` → use Gemini via
-   ``langchain-google-genai`` (reads ``GEMINI_API_KEY``).
-2. Otherwise → use Anthropic Claude via ``langchain-anthropic`` (reads
-   ``ANTHROPIC_API_KEY``).
+Provider selection
+------------------
+1. If ``LAUNCHSAFE_LLM_MODEL`` starts with ``gemini`` → use Gemini
+   (``GEMINI_API_KEY``).
+2. Otherwise → Anthropic Claude (``ANTHROPIC_API_KEY``) — this is the
+   default in :mod:`core.config`.
 
-Switching provider is a one-line change in ``.env``::
+Example overrides::
 
-    LAUNCHSAFE_LLM_MODEL=gemini-3-flash-preview       # cheap + fast
-    LAUNCHSAFE_LLM_MODEL=gemini-3.1-pro-preview       # higher quality
-    LAUNCHSAFE_LLM_MODEL=claude-sonnet-4-5  # back to Claude
+    LAUNCHSAFE_LLM_MODEL=claude-haiku-4-5-20251001   # cheaper / faster
+    LAUNCHSAFE_LLM_MODEL=gemini-2.0-flash             # Gemini instead of Claude
 """
 
 from __future__ import annotations

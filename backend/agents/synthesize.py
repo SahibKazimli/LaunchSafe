@@ -23,6 +23,7 @@ from agents.prompts.executive_summary import (
     EXECUTIVE_SUMMARY_SYSTEM,
     format_executive_summary_user,
 )
+from .compliance_enrichment import coerce_compliance_item, enrich_compliance_list
 from .runtime_log import emit
 from .schemas import AuditReport, ComplianceRef, Finding
 from tools.scanners import SEVERITY_DEFAULT_CVSS, infer_exposure_from_path
@@ -76,17 +77,21 @@ def _dedupe(findings: list[dict]) -> list[Finding]:
         else:
             keep = dict(winner)
 
-        merged_refs: list[dict] = []
-        seen: set[str] = set()
+        by_cid: dict[str, dict] = {}
         for ref in (raw.get("compliance") or []) + ((winner or {}).get("compliance") or []):
-            if not isinstance(ref, dict):
+            d = coerce_compliance_item(ref)
+            if not d or not d["id"]:
                 continue
-            ref_id = ref.get("id")
-            if not ref_id or ref_id in seen:
+            cid = d["id"]
+            if cid not in by_cid:
+                by_cid[cid] = d
                 continue
-            seen.add(ref_id)
-            merged_refs.append(ref)
-        keep["compliance"] = merged_refs
+            cur = by_cid[cid]
+            if (d.get("url")) and (not cur.get("url")):
+                cur["url"] = d["url"]
+            if len((d.get("summary") or "")) > len((cur.get("summary") or "")):
+                cur["summary"] = d["summary"]
+        keep["compliance"] = list(by_cid.values())
 
         by_key[key] = keep
 
@@ -94,18 +99,15 @@ def _dedupe(findings: list[dict]) -> list[Finding]:
     for raw in by_key.values():
         raw.pop("_branch", None)
         refs: list[ComplianceRef] = []
-        for ref in raw.get("compliance") or []:
-            if not isinstance(ref, dict) or not ref.get("id"):
-                continue
+        for d in enrich_compliance_list(raw.get("compliance") or []):
             try:
-                refs.append(ComplianceRef.model_validate(ref))
+                refs.append(ComplianceRef.model_validate(d))
             except Exception:  
-                # Tolerate partial refs (e.g. id-only); the popover will
-                # still render the id even without a summary.
+                # Tolerate partial refs; the report UI still shows id + link if present.
                 refs.append(ComplianceRef.model_construct(
-                    id=str(ref.get("id")),
-                    summary=str(ref.get("summary") or ""),
-                    url=ref.get("url"),
+                    id=str(d.get("id")),
+                    summary=str(d.get("summary") or ""),
+                    url=d.get("url"),
                 ))
 
         backfilled = _backfill_score_fields(raw)

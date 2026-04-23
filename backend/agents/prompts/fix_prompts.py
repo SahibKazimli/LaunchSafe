@@ -52,6 +52,9 @@ Rules:
   - Do **not** output patched code, replacements, or diffs — only regions to find.
   - Include enough lines (often a full function, handler, or config stanza) to
     apply the remediation safely, but only text that **literally appears** in the excerpt.
+  - If the issue needs more than a one-line tweak (validation, safe defaults, auth
+    checks), your `original_snippet` should span the whole region you will need to
+    replace so step 2 can apply a **complete** fix in one go.
   - If a finding has no matching file or no verbatim region, skip it and mention in `notes`.
   - Multiple `items` per path are allowed for separate regions.
 """
@@ -85,6 +88,8 @@ Rules:
   - Do **not** output unified diff — the server computes it.
   - `patched_snippet` must be a drop-in replacement for **only** that `original_snippet`
     block (same span of logic; do not merge unrelated regions).
+  - The fix must **meaningfully** address the vulnerability: add the checks, crypto,
+    or configuration the finding calls for, not a cosmetic rename or no-op.
   - Preserve behavior outside the security fix; do not delete validation or error
     paths unless the finding explicitly requires it.
   - Dependency files: never relax a safe pin to a looser minimum (e.g. do not replace

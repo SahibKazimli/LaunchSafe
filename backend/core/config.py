@@ -104,6 +104,8 @@ FIX_PATCH_FILE_PROMPT_MAX_CHARS: int = _env_int(
 )
 # Lines before/after cited finding line(s) in patch prompts (tight window vs whole file).
 FIX_PATCH_LINE_MARGIN: int = _env_int("FIX_PATCH_LINE_MARGIN", 16)
+# How many fix groups may run LLM locate+edit concurrently (semaphore). 1 = sequential.
+FIX_MAX_CONCURRENT_PATCH_GROUPS: int = _env_int("FIX_MAX_CONCURRENT_PATCH_GROUPS", 3)
 
 # Fewer files per ``select_hotspots`` → fewer follow-up reads / AI scans
 SELECT_HOTSPOT_MAX_FILES: int = _env_int("SELECT_HOTSPOT_MAX_FILES", 6)

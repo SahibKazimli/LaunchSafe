@@ -47,6 +47,9 @@ from .fix_state import (
 )
 
 from agents.prompts.fix_prompts import (
+    FIX_PLAN_RESOLVED_PATHS_HEADER,
+    PATCH_BROAD_PATH_HINT,
+    PATCH_DOC_ONLY_FINDINGS_INTRO,
     PATCH_EDIT_RETRY as _PATCH_EDIT_RETRY,
     PATCH_EDIT_RETRY_2 as _PATCH_EDIT_RETRY_2,
     PATCH_EDIT_RETRY_GROUNDING as _PATCH_EDIT_RETRY_GROUNDING,
@@ -56,6 +59,17 @@ from agents.prompts.fix_prompts import (
     PATCH_LOCATE_SYSTEM as _PATCH_LOCATE_SYSTEM,
     PLAN_SYSTEM as _PLAN_SYSTEM,
     REVIEW_SYSTEM as _REVIEW_SYSTEM,
+    format_fix_group_report_context,
+    format_fix_plan_user,
+    format_patch_finding_row_doc_only,
+    format_patch_finding_row_primary,
+    format_patch_edit_user,
+    format_patch_file_missing_user,
+    format_patch_locate_targets_block,
+    format_patch_locate_user,
+    format_patch_review_section_diff,
+    format_patch_review_section_no_patches,
+    format_patch_review_user,
 )
 
 
@@ -231,24 +245,27 @@ def _format_findings_for_patch_prompt(
     if primary:
         chunks.append(
             "\n".join(
-                f"- [report #{_report_index_for_finding(f, rf)}] "
-                f"({f.get('severity', '?')}) {f.get('title', '?')} "
-                f"@ {f.get('location', '?')}\n"
-                f"  Description: {(f.get('description', '') or '')[:300]}\n"
-                f"  Suggested fix: {(f.get('fix', '') or '')[:400]}"
+                format_patch_finding_row_primary(
+                    _report_index_for_finding(f, rf),
+                    str(f.get("severity", "?")),
+                    str(f.get("title", "?")),
+                    str(f.get("location", "?")),
+                    f.get("description", "") or "",
+                    f.get("fix", "") or "",
+                )
                 for f in primary
             )
         )
     if doc_only:
         chunks.append(
-            "---\nThese findings have **no matching source file** in this scan "
-            "(e.g. missing policy URL). Do **not** emit FilePatch for them; "
-            "only fix the files in ORIGINAL FILES above. You may mention them "
-            "in PatchResult.notes:\n"
+            PATCH_DOC_ONLY_FINDINGS_INTRO
             + "\n".join(
-                f"- [report #{_report_index_for_finding(f, rf)}] "
-                f"({f.get('severity', '?')}) {f.get('title', '?')} "
-                f"@ {f.get('location', '?')}"
+                format_patch_finding_row_doc_only(
+                    _report_index_for_finding(f, rf),
+                    str(f.get("severity", "?")),
+                    str(f.get("title", "?")),
+                    str(f.get("location", "?")),
+                )
                 for f in doc_only
             )
         )
@@ -329,31 +346,29 @@ def _format_group_report_context(
     max_chars: int = FIX_PATCH_GROUP_CONTEXT_MAX_CHARS,
 ) -> str:
     """Slim audit text: this group’s findings only (saves input tokens vs full report)."""
-    lines = [
-        "## Audit context (this fix group only)",
-        f"Scan grade: {sess.get('report_grade', '?')} | "
-        f"Overall risk: {sess.get('report_overall_risk', '')}",
-    ]
-    lines.append(f"Findings in this group ({len(group_findings)}); [report #] ties to scan list:")
     rf = report_full or []
+    bullet_lines: list[str] = []
     for finding in group_findings:
         if not isinstance(finding, dict):
             continue
         ri = _report_index_for_finding(finding, rf)
-        lines.append(
+        bullet_lines.append(
             f"- [report #{ri}] ({finding.get('severity', '?')}) "
             f"{finding.get('title', '?')} @ {finding.get('location', '?')}"
         )
         desc = (finding.get("description") or "").strip()
         if desc:
-            lines.append(f"  Detail: {desc[:480]}")
+            bullet_lines.append(f"  Detail: {desc[:480]}")
         fx = (finding.get("fix") or "").strip()
         if fx:
-            lines.append(f"  Remediation: {fx[:720]}")
-    text = "\n".join(lines)
-    if len(text) > max_chars:
-        return text[:max_chars] + "\n...[group context truncated]\n"
-    return text
+            bullet_lines.append(f"  Remediation: {fx[:720]}")
+    return format_fix_group_report_context(
+        str(sess.get("report_grade", "?")),
+        str(sess.get("report_overall_risk", "")),
+        len(group_findings),
+        bullet_lines,
+        max_chars,
+    )
 
 
 def _original_snippet_in_file(original: str, content: str) -> bool:
@@ -493,17 +508,17 @@ async def plan_fixes_node(state: dict[str, Any]) -> dict[str, Any]:
     resolved_lines = resolve_paths_for_findings(findings, files)
     resolved_block = ""
     if resolved_lines:
-        resolved_block = (
-            "\n\nRESOLVED_REPO_PATHS (prefer these exact paths in target_files):\n"
-            + "\n".join(f"  - {p}" for p in resolved_lines)
+        resolved_block = FIX_PLAN_RESOLVED_PATHS_HEADER + "\n".join(
+            f"  - {p}" for p in resolved_lines
         )
 
-    user_msg = (
-        f"Target: {state.get('target', '?')}\n\n"
-        f"FINDINGS ({len(findings)}):\n"
-        + "\n".join(finding_lines)
-        + f"\n\nAVAILABLE FILES ({len(files)}):\n{file_list}"
-        + resolved_block
+    user_msg = format_fix_plan_user(
+        str(state.get("target", "?")),
+        "\n".join(finding_lines),
+        len(findings),
+        len(files),
+        file_list,
+        resolved_block,
     )
 
     try:
@@ -590,16 +605,6 @@ def _validated_locate_items(
         seen.add(key)
         out.append((matched_key or p, orig))
     return out
-
-
-def _format_locate_targets_for_edit(validated: list[tuple[str, str]]) -> str:
-    blocks: list[str] = []
-    for i, (path, orig) in enumerate(validated):
-        blocks.append(
-            f"#### LOCATE TARGET [{i}] path=`{path}`\n"
-            f"original_snippet (replace this exact block):\n```\n{orig}\n```"
-        )
-    return "\n\n".join(blocks)
 
 
 def _merge_edits_to_file_patches(
@@ -759,33 +764,18 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
                 "no matching repo path (empty or non-path locations); "
                 "narrative text did not match any file key"
             )
-            files_text = (
-                f"(File content not found for: {missing_list}. "
-                "Skip this group and note in PatchResult.notes.)"
-            )
+            files_text = format_patch_file_missing_user(missing_list)
 
-        broad_path_hint = ""
-        if not code_findings:
-            broad_path_hint = (
-                "\n\n**Path hint:** Some findings here may not cite an exact file. "
-                "Search the ORIGINAL FILES for behavior matching the issue (routes, "
-                "handlers, middleware, validation) and patch there — do not skip "
-                "the group if source files are shown above."
-            )
+        broad_path_hint = "" if code_findings else PATCH_BROAD_PATH_HINT
 
-        user_msg = (
-            f"{report_context}\n\n"
-            f"---\n"
-            f"## Your task (this fix group only)\n"
-            f"Implement patches that satisfy the **FINDINGS TO FIX** section below, "
-            f"using the **Remediation** lines where present. "
-            f"[report #N] matches the scan’s finding order.\n\n"
-            f"FIX GROUP: {group.get('label', group_id)}\n"
-            f"Commit message: {group.get('commit_message', '')}\n"
-            f"Risk level: {group.get('risk_level', 'medium')}\n\n"
-            f"FINDINGS TO FIX (group):\n{finding_text}\n\n"
-            f"ORIGINAL FILES:\n{files_text}"
-            f"{broad_path_hint}"
+        user_msg = format_patch_locate_user(
+            report_context,
+            str(group.get("label", group_id)),
+            str(group.get("commit_message", "")),
+            str(group.get("risk_level", "medium")),
+            finding_text,
+            files_text,
+            broad_path_hint,
         )
 
         if not has_file_content:
@@ -852,17 +842,16 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
                 )
             else:
                 # ── Step 2: patched_snippet per index ───────────────────
-                locate_block = _format_locate_targets_for_edit(validated)
-                edit_user_msg = (
-                    f"{report_context}\n\n"
-                    f"---\n"
-                    f"## Step 2 — apply fixes (this group only)\n"
-                    f"FIX GROUP: {group.get('label', group_id)}\n"
-                    f"Commit message: {group.get('commit_message', '')}\n"
-                    f"Risk level: {group.get('risk_level', 'medium')}\n\n"
-                    f"FINDINGS TO FIX (group):\n{finding_text}\n\n"
-                    f"LOCATE TARGETS (indices 0..{len(validated) - 1}):\n{locate_block}\n\n"
-                    f"ORIGINAL FILES (same excerpts as step 1):\n{files_text}"
+                locate_block = format_patch_locate_targets_block(validated)
+                edit_user_msg = format_patch_edit_user(
+                    report_context,
+                    str(group.get("label", group_id)),
+                    str(group.get("commit_message", "")),
+                    str(group.get("risk_level", "medium")),
+                    finding_text,
+                    len(validated) - 1,
+                    locate_block,
+                    files_text,
                 )
                 edit_structured = llm.with_structured_output(PatchEditBundle)
                 extra_ed = ""
@@ -963,16 +952,20 @@ async def review_patches_node(state: dict[str, Any]) -> dict[str, Any]:
         patches = patch_result.get("patches", [])
         if not patches:
             review_sections.append(
-                f"### {group_id} → (no patch rows)\n"
-                f"Notes: {patch_result.get('notes', 'n/a')}"
+                format_patch_review_section_no_patches(
+                    group_id, str(patch_result.get("notes", "n/a"))
+                )
             )
             continue
         for patch in patches:
             diff = patch.get("diff", "") or "(no diff)"
             review_sections.append(
-                f"### {group_id} → {patch.get('path', '?')}\n"
-                f"```diff\n{diff[:3000]}\n```\n"
-                f"Explanation: {patch.get('explanation', 'n/a')}"
+                format_patch_review_section_diff(
+                    group_id,
+                    str(patch.get("path", "?")),
+                    diff,
+                    str(patch.get("explanation", "n/a")),
+                )
             )
 
     if not review_sections:
@@ -983,11 +976,7 @@ async def review_patches_node(state: dict[str, Any]) -> dict[str, Any]:
             ).model_dump()
         }
 
-    user_msg = (
-        f"PATCHES TO REVIEW ({len(review_sections)} files across "
-        f"{len(patch_results)} groups):\n\n"
-        + "\n\n---\n\n".join(review_sections)
-    )
+    user_msg = format_patch_review_user(review_sections, len(patch_results))
 
     try:
         llm = get_llm(max_tokens=FIX_REVIEW_MAX_TOKENS)

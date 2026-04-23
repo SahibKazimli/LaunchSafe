@@ -116,3 +116,231 @@ Set approved=true only if there is at least one real code change to apply
 and the batch is safe. If every diff is empty or cosmetic, approved=false.
 Set approved=false and explain in conflicts/warnings if not.
 """
+
+
+def format_fix_excerpt_narrow_cited(
+    matched_path: str,
+    lo: int,
+    hi: int,
+    n: int,
+    excerpt: str,
+) -> str:
+    return (
+        f"### {matched_path} (lines {lo}-{hi} of {n}; excerpt around cited finding — "
+        "copy `original_snippet` only from this block)\n"
+        f"```\n{excerpt}\n```"
+    )
+
+
+def format_fix_excerpt_full_file(
+    matched_path: str, n: int, char_len: int, content: str
+) -> str:
+    return (
+        f"### {matched_path} (COMPLETE FILE — {n} lines, {char_len} chars; "
+        "apply a minimal in-place fix)\n"
+        f"```\n{content}\n```"
+    )
+
+
+def format_fix_excerpt_large_window(
+    matched_path: str, lo: int, hi: int, n: int, excerpt: str
+) -> str:
+    return (
+        f"### {matched_path} (lines {lo}-{hi} of {n}; file too large for full paste; "
+        "excerpt around cited finding line(s))\n"
+        f"```\n{excerpt}\n```"
+    )
+
+
+FIX_EXCERPT_TRUNCATED_HEAD_NOTE = (
+    "\n...[truncated — file exceeds full-file prompt cap and has no line "
+    "numbers; showing start only]\n"
+)
+
+
+def format_fix_excerpt_head_only(
+    matched_path: str, n: int, byte_len: int, excerpt: str
+) -> str:
+    return (
+        f"### {matched_path} ({n} lines, {byte_len} bytes — excerpt only)\n"
+        f"```\n{excerpt}\n```"
+    )
+
+
+# ── Fix graph user messages (plan / patch / review) ───────────────────────────
+
+
+def format_fix_plan_user(
+    target: str,
+    findings_block: str,
+    n_findings: int,
+    n_files: int,
+    files_listing: str,
+    resolved_block: str,
+) -> str:
+    return (
+        f"Target: {target}\n\n"
+        f"FINDINGS ({n_findings}):\n{findings_block}"
+        f"\n\nAVAILABLE FILES ({n_files}):\n{files_listing}"
+        + resolved_block
+    )
+
+
+FIX_PLAN_RESOLVED_PATHS_HEADER = (
+    "\n\nRESOLVED_REPO_PATHS (prefer these exact paths in target_files):\n"
+)
+
+
+def format_patch_finding_row_primary(
+    report_idx: str,
+    severity: str,
+    title: str,
+    location: str,
+    description: str,
+    suggested_fix: str,
+    desc_max: int = 300,
+    fix_max: int = 400,
+) -> str:
+    return (
+        f"- [report #{report_idx}] ({severity}) {title} @ {location}\n"
+        f"  Description: {description[:desc_max]}\n"
+        f"  Suggested fix: {suggested_fix[:fix_max]}"
+    )
+
+
+def format_patch_finding_row_doc_only(
+    report_idx: str,
+    severity: str,
+    title: str,
+    location: str,
+) -> str:
+    return (
+        f"- [report #{report_idx}] ({severity}) {title} @ {location}"
+    )
+
+
+PATCH_DOC_ONLY_FINDINGS_INTRO = (
+    "---\nThese findings have **no matching source file** in this scan "
+    "(e.g. missing policy URL). Do **not** emit FilePatch for them; "
+    "only fix the files in ORIGINAL FILES above. You may mention them "
+    "in PatchResult.notes:\n"
+)
+
+
+def format_patch_file_missing_user(missing_list: str) -> str:
+    return (
+        f"(File content not found for: {missing_list}. "
+        "Skip this group and note in PatchResult.notes.)"
+    )
+
+
+PATCH_BROAD_PATH_HINT = (
+    "\n\n**Path hint:** Some findings here may not cite an exact file. "
+    "Search the ORIGINAL FILES for behavior matching the issue (routes, "
+    "handlers, middleware, validation) and patch there — do not skip "
+    "the group if source files are shown above."
+)
+
+
+def format_patch_locate_targets_block(validated: list[tuple[str, str]]) -> str:
+    blocks: list[str] = []
+    for i, (path, orig) in enumerate(validated):
+        blocks.append(
+            f"#### LOCATE TARGET [{i}] path=`{path}`\n"
+            f"original_snippet (replace this exact block):\n```\n{orig}\n```"
+        )
+    return "\n\n".join(blocks)
+
+
+def format_patch_locate_user(
+    report_context: str,
+    group_label: str,
+    commit_message: str,
+    risk_level: str,
+    finding_text: str,
+    files_text: str,
+    broad_path_hint: str,
+) -> str:
+    return (
+        f"{report_context}\n\n"
+        f"---\n"
+        f"## Your task (this fix group only)\n"
+        f"Implement patches that satisfy the **FINDINGS TO FIX** section below, "
+        f"using the **Remediation** lines where present. "
+        f"[report #N] matches the scan’s finding order.\n\n"
+        f"FIX GROUP: {group_label}\n"
+        f"Commit message: {commit_message}\n"
+        f"Risk level: {risk_level}\n\n"
+        f"FINDINGS TO FIX (group):\n{finding_text}\n\n"
+        f"ORIGINAL FILES:\n{files_text}"
+        f"{broad_path_hint}"
+    )
+
+
+def format_patch_edit_user(
+    report_context: str,
+    group_label: str,
+    commit_message: str,
+    risk_level: str,
+    finding_text: str,
+    last_target_index: int,
+    locate_block: str,
+    files_text: str,
+) -> str:
+    return (
+        f"{report_context}\n\n"
+        f"---\n"
+        f"## Step 2 — apply fixes (this group only)\n"
+        f"FIX GROUP: {group_label}\n"
+        f"Commit message: {commit_message}\n"
+        f"Risk level: {risk_level}\n\n"
+        f"FINDINGS TO FIX (group):\n{finding_text}\n\n"
+        f"LOCATE TARGETS (indices 0..{last_target_index}):\n{locate_block}\n\n"
+        f"ORIGINAL FILES (same excerpts as step 1):\n{files_text}"
+    )
+
+
+def format_patch_review_section_no_patches(group_id: str, notes: str) -> str:
+    return f"### {group_id} → (no patch rows)\nNotes: {notes}"
+
+
+def format_patch_review_section_diff(
+    group_id: str,
+    path: str,
+    diff: str,
+    explanation: str,
+    diff_max_chars: int = 3000,
+) -> str:
+    clipped = (diff or "")[:diff_max_chars]
+    return (
+        f"### {group_id} → {path}\n"
+        f"```diff\n{clipped}\n```\n"
+        f"Explanation: {explanation}"
+    )
+
+
+def format_patch_review_user(review_sections: list[str], n_groups: int) -> str:
+    return (
+        f"PATCHES TO REVIEW ({len(review_sections)} files across "
+        f"{n_groups} groups):\n\n"
+        + "\n\n---\n\n".join(review_sections)
+    )
+
+
+def format_fix_group_report_context(
+    report_grade: str,
+    overall_risk: str,
+    n_findings: int,
+    finding_bullet_lines: list[str],
+    max_chars: int,
+) -> str:
+    lines = [
+        "## Audit context (this fix group only)",
+        f"Scan grade: {report_grade} | Overall risk: {overall_risk}",
+        f"Findings in this group ({n_findings}); [report #] ties to scan list:",
+        *finding_bullet_lines,
+    ]
+    text = "\n".join(lines)
+    if len(text) > max_chars:
+        return text[:max_chars] + "\n...[group context truncated]\n"
+    return text

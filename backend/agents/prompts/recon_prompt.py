@@ -41,3 +41,13 @@ before returning the profile.
 Do NOT attempt to find specific vulnerabilities yet. Recon is about
 understanding the system and identifying where to look hardest.
 """
+
+
+def recon_user_message(file_count: int) -> str:
+    return (
+        f"Profile this repo. It has {file_count} files. "
+        "Start by calling list_repo_files, then read strategically."
+    )
+
+
+RECON_PHASE_CONTEXT_PREFIX = "Recon is complete. Here is the RepoProfile:\n\n"

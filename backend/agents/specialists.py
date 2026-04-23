@@ -29,17 +29,18 @@ from pydantic import BaseModel, Field
 
 from core.config import (
     SPEC_MAX_TOKENS,
-    SPEC_MAX_TOOL_CALLS,
     spec_react_recursion_limit,
 )
-from agents.prompts import specialist_lanes as _lanes
-from .runtime_log import emit
-from .schemas import (
-    COMPLIANCE_INSTRUCTIONS,
-    CVSS_AND_EXPOSURE_RUBRIC,
-    SEVERITY_RUBRIC,
-    Finding,
+from agents.prompts.specialist_prompts import (
+    AUTH_PROMPT,
+    CICD_PROMPT,
+    GENERAL_PROMPT,
+    IAC_PROMPT,
+    PAYMENTS_PROMPT,
+    SPECIALIST_KICKOFF,
 )
+from .runtime_log import emit
+from .schemas import Finding
 from .state import ScanAgentState
 from .stream import collect_salvage, iter_stream_events
 from tools.agent_tools import ALL_TOOLS as REGEX_TOOLS
@@ -57,65 +58,6 @@ class _BranchFindings(BaseModel):
         default="",
         description="ONE sentence on what was checked / what stood out.",
     )
-
-
-
-# Specialist prompts
-
-
-_COMMON_TAIL = f"""\
-
-{SEVERITY_RUBRIC}
-
-{CVSS_AND_EXPOSURE_RUBRIC}
-
-{COMPLIANCE_INSTRUCTIONS}
-
-Workflow:
-  1. Call `select_hotspots` with your lane name to get a pre-sorted list
-     of the most relevant files for your specialist area.
-  2. Run the regex triage tools relevant to your lane (cheap, free).
-  3. For each in-scope hotspot, call `ai_scan_file` with the focus that
-     fits your lane. Use `read_file` only for adaptive follow-ups.
-  4. Call `scan_budget_guard` periodically (every 3-4 tool calls) to
-     check your remaining budget. When it says `should_stop: true`,
-     you MUST return immediately.
-  5. Return a `_BranchFindings` object. Keep findings to your lane —
-     overlap is OK if you have stronger evidence than another specialist
-     would, but do NOT pad the list.
-
-Hard rules:
-  - Cap findings at 10 per call. If you have more, keep the most
-    severe / most exploitable ones.
-  - Drop obvious test fixtures, EXAMPLE keys, and docs.
-  - One sentence in `notes` summarising what you checked. If you found
-    nothing, say so explicitly — empty findings + "checked X, Y, Z, all
-    clean" is a valid, useful result.
-
-Step budget (mandatory):
-  - You may use at most {SPEC_MAX_TOOL_CALLS} tool invocations in total
-    (all tools count: list/read/regex/ai_scan_*/budget/hotspots). Plan
-    triage in few calls, then spend the rest on the highest-signal paths.
-  - Use `scan_budget_guard` to check your remaining budget. When it
-    returns `should_stop: true`, return `_BranchFindings` immediately
-    with **no further tools** — partial results are always better than
-    stalling. Say what is unchecked in `notes` if you had to cut short.
-"""
-
-
-PAYMENTS_PROMPT = _lanes.PAYMENTS + _COMMON_TAIL
-
-
-IAC_PROMPT = _lanes.IAC + _COMMON_TAIL
-
-
-AUTH_PROMPT = _lanes.AUTH + _COMMON_TAIL
-
-
-CICD_PROMPT = _lanes.CICD + _COMMON_TAIL
-
-
-GENERAL_PROMPT = _lanes.GENERAL + _COMMON_TAIL
 
 
 
@@ -243,18 +185,11 @@ def _make_specialist_node(name: str, prompt: str, kickoff_msg: str):
 
 # Public API: one node per specialist + the conditional router
 
-
-_KICKOFF = (
-    "Recon is complete; the RepoProfile is in your state. Audit this "
-    "repo within YOUR lane only. Use the regex triage tools first, "
-    "then ai_scan_file on the relevant hotspots. Return a _BranchFindings."
-)
-
-payments_audit_node = _make_specialist_node("payments", PAYMENTS_PROMPT, _KICKOFF)
-iac_audit_node      = _make_specialist_node("iac",      IAC_PROMPT,      _KICKOFF)
-auth_audit_node     = _make_specialist_node("auth",     AUTH_PROMPT,     _KICKOFF)
-cicd_audit_node     = _make_specialist_node("cicd",     CICD_PROMPT,     _KICKOFF)
-general_audit_node  = _make_specialist_node("general",  GENERAL_PROMPT,  _KICKOFF)
+payments_audit_node = _make_specialist_node("payments", PAYMENTS_PROMPT, SPECIALIST_KICKOFF)
+iac_audit_node      = _make_specialist_node("iac",      IAC_PROMPT,      SPECIALIST_KICKOFF)
+auth_audit_node     = _make_specialist_node("auth",     AUTH_PROMPT,     SPECIALIST_KICKOFF)
+cicd_audit_node     = _make_specialist_node("cicd",     CICD_PROMPT,     SPECIALIST_KICKOFF)
+general_audit_node  = _make_specialist_node("general",  GENERAL_PROMPT,  SPECIALIST_KICKOFF)
 
 
 SPECIALIST_NODES: dict[str, Any] = {

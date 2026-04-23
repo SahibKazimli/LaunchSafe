@@ -19,7 +19,10 @@ from __future__ import annotations
 from typing import Any
 
 from core.config import SYNTH_MAX_TOKENS
-from agents.prompts.executive_summary import EXECUTIVE_SUMMARY_SYSTEM
+from agents.prompts.executive_summary import (
+    EXECUTIVE_SUMMARY_SYSTEM,
+    format_executive_summary_user,
+)
 from .runtime_log import emit
 from .schemas import AuditReport, ComplianceRef, Finding
 from tools.scanners import SEVERITY_DEFAULT_CVSS, infer_exposure_from_path
@@ -205,12 +208,7 @@ def _llm_summary(target: str, findings: list[Finding], branches: dict[str, int])
     body = "\n".join(rendered)
 
     system = EXECUTIVE_SUMMARY_SYSTEM
-    user = (
-        f"Target: {target}\n"
-        f"Specialist coverage: {branches}\n"
-        f"Total findings (after dedup): {len(findings)}\n\n"
-        f"FINDINGS:\n{body}\n"
-    )
+    user = format_executive_summary_user(target, branches, len(findings), body)
 
     try:
         llm = get_llm(max_tokens=SYNTH_MAX_TOKENS)

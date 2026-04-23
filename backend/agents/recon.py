@@ -18,7 +18,11 @@ from typing import Any
 from langchain_core.messages import HumanMessage
 
 from core.config import RECON_MAX_TOKENS
-from agents.prompts.recon_prompt import RECON_PROMPT
+from agents.prompts.recon_prompt import (
+    RECON_PHASE_CONTEXT_PREFIX,
+    RECON_PROMPT,
+    recon_user_message,
+)
 from .runtime_log import emit
 from .schemas import RepoProfile
 from .state import ScanAgentState
@@ -72,10 +76,7 @@ async def recon_node(state: dict[str, Any]) -> dict[str, Any]:
         {
             "messages": [{
                 "role": "user",
-                "content": (
-                    f"Profile this repo. It has {len(files)} files. "
-                    "Start by calling list_repo_files, then read strategically."
-                ),
+                "content": recon_user_message(len(files)),
             }],
             "files": files,
             "scan_id": scan_id,
@@ -113,10 +114,9 @@ async def recon_node(state: dict[str, Any]) -> dict[str, Any]:
         branch="recon",
     )
 
-    context_msg = HumanMessage(content=(
-        "Recon is complete. Here is the RepoProfile:\n\n"
-        f"{profile.model_dump_json(indent=2)}"
-    ))
+    context_msg = HumanMessage(
+        content=RECON_PHASE_CONTEXT_PREFIX + profile.model_dump_json(indent=2)
+    )
 
     return {
         "repo_profile": profile.model_dump(),

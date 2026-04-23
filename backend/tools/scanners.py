@@ -276,7 +276,7 @@ def scan_api(files: dict[str, str]) -> list[dict]:
 #
 # `cvss_base` is the LLM's CVSS v3.1-aligned 0.0–10.0 score for the finding
 # (it picks a number inside the band of its chosen severity — see
-# CVSS_AND_EXPOSURE_RUBRIC in schemas.py).
+# CVSS_AND_EXPOSURE_RUBRIC in agents.prompts.audit_rubrics).
 #
 # `exposure_multiplier` reflects whether the vulnerable code actually ships:
 #   production  1.00   - live request handlers, prod IaC, prod auth code

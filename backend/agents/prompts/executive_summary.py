@@ -20,3 +20,17 @@ Your only original output is:
     Use the calibration anchors: any critical finding -> 'critical';
     >=3 high or one critical-adjacent pattern -> 'high'; etc.
 """
+
+
+def format_executive_summary_user(
+    target: str,
+    branches: dict[str, int],
+    findings_count: int,
+    findings_block: str,
+) -> str:
+    return (
+        f"Target: {target}\n"
+        f"Specialist coverage: {branches}\n"
+        f"Total findings (after dedup): {findings_count}\n\n"
+        f"FINDINGS:\n{findings_block}\n"
+    )

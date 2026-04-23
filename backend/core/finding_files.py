@@ -9,6 +9,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from agents.prompts.fix_prompts import (
+    FIX_EXCERPT_TRUNCATED_HEAD_NOTE,
+    format_fix_excerpt_full_file,
+    format_fix_excerpt_head_only,
+    format_fix_excerpt_large_window,
+    format_fix_excerpt_narrow_cited,
+)
+
 
 def _finding_narrative_blob(finding: dict) -> str:
     """Text used to guess file paths when ``location`` is missing or wrong."""
@@ -220,39 +228,21 @@ def build_excerpt_for_fix_prompt(
         lo = max(1, min(line_nums) - line_margin)
         hi = min(n, max(line_nums) + line_margin)
         excerpt = "".join(lines[lo - 1 : hi])
-        return (
-            f"### {matched_path} (lines {lo}-{hi} of {n}; excerpt around cited finding — "
-            "copy `original_snippet` only from this block)\n"
-            f"```\n{excerpt}\n```"
-        )
+        return format_fix_excerpt_narrow_cited(matched_path, lo, hi, n, excerpt)
 
     if len(content) <= full_file_max_chars:
-        return (
-            f"### {matched_path} (COMPLETE FILE — {n} lines, {len(content)} chars; "
-            "apply a minimal in-place fix)\n"
-            f"```\n{content}\n```"
-        )
+        return format_fix_excerpt_full_file(matched_path, n, len(content), content)
 
     if line_nums and n > 0:
         lo = max(1, min(line_nums) - line_margin)
         hi = min(n, max(line_nums) + line_margin)
         excerpt = "".join(lines[lo - 1 : hi])
-        return (
-            f"### {matched_path} (lines {lo}-{hi} of {n}; file too large for full paste; "
-            "excerpt around cited finding line(s))\n"
-            f"```\n{excerpt}\n```"
-        )
+        return format_fix_excerpt_large_window(matched_path, lo, hi, n, excerpt)
 
     excerpt = content[:head_limit]
     if len(content) > head_limit:
-        excerpt += (
-            "\n...[truncated — file exceeds full-file prompt cap and has no line "
-            "numbers; showing start only]\n"
-        )
-    return (
-        f"### {matched_path} ({n} lines, {len(content)} bytes — excerpt only)\n"
-        f"```\n{excerpt}\n```"
-    )
+        excerpt += FIX_EXCERPT_TRUNCATED_HEAD_NOTE
+    return format_fix_excerpt_head_only(matched_path, n, len(content), excerpt)
 
 
 def merge_scan_files_for_fix(fix_session: dict[str, Any], scan: dict[str, Any]) -> dict[str, str]:

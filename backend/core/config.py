@@ -2,6 +2,13 @@
 
 Every tunable constant lives here.  Modules import what they need instead
 of defining their own defaults.
+
+**Gemini / cost tuning:** Defaults err on the cheaper side. Override at
+runtime with env vars (this module reads ``LAUNCHSAFE_<KEY>``, e.g.
+``LAUNCHSAFE_SPEC_MAX_TOOL_CALLS``, ``LAUNCHSAFE_SYNTH_MAX_TOKENS``).
+The largest savings are usually ``SPEC_MAX_TOOL_CALLS`` (fewer tool
+round-trips per specialist) and output token caps on recon / synth /
+ai_scan / fix.
 """
 
 from __future__ import annotations
@@ -56,17 +63,9 @@ def spec_react_recursion_limit() -> int:
 
 
 # LLM / agent knobs
-#
-# Cost control (all overridable via LAUNCHSAFE_<NAME> in the environment):
-#   - SPEC_MAX_TOOL_CALLS — strongest savings (fewer Gemini round-trips per
-#     specialist branch). Prompts and scan_budget_guard read this value.
-#   - *_MAX_TOKENS — caps on model output per call (input still depends on
-#     tools; tighten truncation below to reduce prompt size).
-#   - LLM_MODEL — use e.g. gemini-3-flash-preview for cheaper/faster calls
-#     (see agents/llm.py).
 
-# Default to Flash for lower cost; override with LAUNCHSAFE_LLM_MODEL for Pro.
-LLM_MODEL: str             = _env_str("LLM_MODEL", "gemini-3-flash-preview")
+
+LLM_MODEL: str             = _env_str("LLM_MODEL", "gemini-3.1-pro-preview")
 
 SPEC_RECURSION_LIMIT: int   = _env_int("SPEC_RECURSION_LIMIT", 24)
 SPEC_MAX_TOKENS: int        = _env_int("SPEC_MAX_TOKENS", 3072)
@@ -78,6 +77,14 @@ RECON_MAX_TOKENS: int       = _env_int("RECON_MAX_TOKENS", 1536)
 SYNTH_MAX_TOKENS: int       = _env_int("SYNTH_MAX_TOKENS", 1536)
 AI_SCAN_MAX_TOKENS: int     = _env_int("AI_SCAN_MAX_TOKENS", 1536)
 
+# Phase-2 fix graph (separate caps so patch generation can stay higher than plan/review)
+FIX_PLAN_MAX_TOKENS: int    = _env_int("FIX_PLAN_MAX_TOKENS", 1536)
+FIX_PATCH_MAX_TOKENS: int   = _env_int("FIX_PATCH_MAX_TOKENS", 3072)
+FIX_REVIEW_MAX_TOKENS: int  = _env_int("FIX_REVIEW_MAX_TOKENS", 1536)
+
+# Fewer files per ``select_hotspots`` → fewer follow-up reads / AI scans
+SELECT_HOTSPOT_MAX_FILES: int = _env_int("SELECT_HOTSPOT_MAX_FILES", 6)
+
 
 
 # Truncation 
@@ -86,9 +93,6 @@ MAX_FILE_BYTES: int          = _env_int("MAX_FILE_BYTES", 16_000)
 MAX_CICD_BUNDLE_BYTES: int   = _env_int("MAX_CICD_BUNDLE_BYTES", 40_000)
 MAX_AUTH_BUNDLE_BYTES: int   = _env_int("MAX_AUTH_BUNDLE_BYTES", 40_000)
 MAX_INGEST_FILE_BYTES: int   = _env_int("MAX_INGEST_FILE_BYTES", 200_000)
-
-# Per-file cap inside read_files() batch tool (keeps tool responses smaller).
-MAX_TOOL_READ_PER_FILE: int  = _env_int("MAX_TOOL_READ_PER_FILE", 10_000)
 
 MAX_BATCH_BYTES: int         = _env_int("MAX_BATCH_BYTES", 96_000)
 MAX_FILES_PER_BATCH: int     = _env_int("MAX_FILES_PER_BATCH", 8)

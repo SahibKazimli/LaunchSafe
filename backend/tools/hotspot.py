@@ -20,6 +20,8 @@ from typing import Annotated
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
+from core.config import SELECT_HOTSPOT_MAX_FILES
+
 
 # Lane → path keywords.  A file matches a lane if any keyword appears
 # anywhere in its lowercased path.  Order matters: earlier keywords are
@@ -103,7 +105,7 @@ def _score_file(
 def select_hotspots(
     lane: str,
     state: Annotated[dict, InjectedState],
-    max_files: int = 8,
+    max_files: int = SELECT_HOTSPOT_MAX_FILES,
 ) -> str:
     """Get the highest-priority files to scan for your specialist lane.
 
@@ -112,7 +114,7 @@ def select_hotspots(
 
     Args:
         lane: Your specialist lane. One of: auth, payments, iac, cicd, general.
-        max_files: Max files to return (default 8).
+        max_files: Max files to return (default from ``SELECT_HOTSPOT_MAX_FILES`` / env).
 
     Returns JSON: {files: [{path, size_bytes, relevance}], lane, total_in_repo}.
     """

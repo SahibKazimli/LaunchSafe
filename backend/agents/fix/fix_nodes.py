@@ -15,7 +15,11 @@ from typing import Any
 
 from agents.llm import get_llm
 from agents.runtime_log import emit
-from core.config import SYNTH_MAX_TOKENS, SPEC_MAX_TOKENS
+from core.config import (
+    FIX_PATCH_MAX_TOKENS,
+    FIX_PLAN_MAX_TOKENS,
+    FIX_REVIEW_MAX_TOKENS,
+)
 from core import scan_store as _ss
 from core.finding_files import (
     find_file_content,
@@ -214,7 +218,7 @@ async def plan_fixes_node(state: dict[str, Any]) -> dict[str, Any]:
     )
 
     try:
-        llm = get_llm(max_tokens=SYNTH_MAX_TOKENS)
+        llm = get_llm(max_tokens=FIX_PLAN_MAX_TOKENS)
         structured = llm.with_structured_output(FixPlan)
         plan: FixPlan = structured.invoke([
             {"role": "system", "content": _PLAN_SYSTEM},
@@ -385,7 +389,7 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
         )
 
         try:
-            llm = get_llm(max_tokens=SPEC_MAX_TOKENS)
+            llm = get_llm(max_tokens=FIX_PATCH_MAX_TOKENS)
             structured = llm.with_structured_output(PatchResult)
             result: PatchResult = structured.invoke([
                 {"role": "system", "content": _PATCH_SYSTEM},
@@ -491,7 +495,7 @@ async def review_patches_node(state: dict[str, Any]) -> dict[str, Any]:
     )
 
     try:
-        llm = get_llm(max_tokens=SYNTH_MAX_TOKENS)
+        llm = get_llm(max_tokens=FIX_REVIEW_MAX_TOKENS)
         structured = llm.with_structured_output(PatchReview)
         review: PatchReview = structured.invoke([
             {"role": "system", "content": _REVIEW_SYSTEM},

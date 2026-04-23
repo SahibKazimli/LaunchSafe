@@ -17,13 +17,7 @@ from typing import Annotated, Any
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
-from core.config import (
-    MAX_BATCH_BYTES,
-    MAX_FILE_BYTES,
-    MAX_FILES_PER_BATCH,
-    MAX_FINDINGS_PER_TOOL,
-    MAX_TOOL_READ_PER_FILE,
-)
+from core.config import MAX_BATCH_BYTES, MAX_FILES_PER_BATCH, MAX_FINDINGS_PER_TOOL
 from .scanners import (
     scan_api,
     scan_auth,
@@ -110,13 +104,13 @@ def list_repo_files(state: Annotated[dict, InjectedState]) -> str:
 def read_file(path: str, state: Annotated[dict, InjectedState]) -> str:
     """Read the full contents of ONE file from the ingested repo. Use this
     when adaptive exploration — you read a file, then pick the next based
-    on what you see. Larger files are truncated per MAX_FILE_BYTES.
+    on what you see. Max 20KB returned; larger files are truncated.
     For reading several files at once prefer `read_files` (faster)."""
     content = state.get("files", {}).get(path)
     if content is None:
         return json.dumps({"error": f"file not in repo: {path}"})
-    if len(content) > MAX_FILE_BYTES:
-        content = content[:MAX_FILE_BYTES] + "\n...[truncated]"
+    if len(content) > 20_000:
+        content = content[:20_000] + "\n...[truncated]"
     return json.dumps({"path": path, "content": content})
 
 
@@ -129,8 +123,8 @@ def read_files(paths: list[str], state: Annotated[dict, InjectedState]) -> str:
     but `read_files` returns everything in one tool response.
 
     Use this when you already know which files you want (typically right
-    after `list_repo_files`). Each file is truncated per MAX_TOOL_READ_PER_FILE;
-    total response is capped by MAX_BATCH_BYTES.
+    after `list_repo_files`). Each file is truncated to 12KB and the total
+    response is capped at ~120KB.
 
     Returns JSON: {"files": [{"path": ..., "content": ..., "truncated": bool}, ...],
     "skipped": [paths that didn't fit or don't exist]}.
@@ -146,8 +140,8 @@ def read_files(paths: list[str], state: Annotated[dict, InjectedState]) -> str:
             skipped.append(path)
             continue
         truncated = False
-        if len(content) > MAX_TOOL_READ_PER_FILE:
-            content = content[:MAX_TOOL_READ_PER_FILE] + "\n...[truncated]"
+        if len(content) > 12_000:
+            content = content[:12_000] + "\n...[truncated]"
             truncated = True
         if total_bytes + len(content) > MAX_BATCH_BYTES:
             skipped.append(path)

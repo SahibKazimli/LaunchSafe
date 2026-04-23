@@ -9,8 +9,10 @@ group them into logical fix batches that can be applied together.
 
 Rules:
   - Findings in the SAME FILE should be in the same group.
-  - Related findings across files (e.g. auth config + auth middleware)
-    should be grouped together if they share a logical concern.
+  - Related findings across files (e.g. auth config + auth middleware) may
+    share one group **only** if the group has at most 5 findings and you do
+    **not** mix dependency/manifest files with application code (see hard limits
+    below). Prefer separate groups per file when in doubt.
   - For each group, **target_files** must include **every** path from
     RESOLVED_REPO_PATHS that matches **any** finding placed in that group.
     Do not omit a file that a grouped finding maps to.
@@ -23,6 +25,16 @@ Rules:
   - Each group gets a conventional commit message.
   - Keep groups focused. 2-6 findings per group is typical.
     Don't put everything in one mega-group.
+  - HARD LIMIT: No group may contain more than 5 findings.
+  - HARD LIMIT: Dependency/manifest files (e.g. requirements.txt, package.json,
+    package-lock.json, go.mod, go.sum, pyproject.toml, poetry.lock) must be in
+    their **own** separate group — never mixed with code findings.
+  - Code findings (auth, injection, CORS, rate limiting, and similar) must be
+    grouped **by file** (one group per affected source file), not by broad
+    theme such as "dependency-update" or "CVE" when only some items are
+    manifest bumps.
+  - If you would output only 1 group for 6+ findings, you have made an error:
+    re-split into multiple groups that obey the limits above.
 """
 
 # ── Step 1: locate verbatim regions (no patched_snippet, no diff) ─────────

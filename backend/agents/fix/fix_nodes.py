@@ -10,7 +10,9 @@ Four nodes, executed sequentially:
 
 from __future__ import annotations
 
+import asyncio
 import difflib
+from collections import defaultdict
 from typing import Any
 
 from agents.llm import get_llm
@@ -21,6 +23,7 @@ from core.config import (
     FIX_PATCH_GROUP_CONTEXT_MAX_CHARS,
     FIX_PATCH_LINE_MARGIN,
     FIX_PATCH_MAX_TOKENS,
+    FIX_PLAN_MAX_FINDINGS_PER_GROUP,
     FIX_PLAN_MAX_TOKENS,
     FIX_REVIEW_MAX_TOKENS,
 )
@@ -30,6 +33,7 @@ from core.finding_files import (
     find_file_content,
     infer_paths_from_finding_text,
     merge_scan_files_for_fix,
+    parse_line_number_from_location,
     resolve_path_to_canonical_key,
     resolve_paths_for_findings,
 )
@@ -207,6 +211,193 @@ def _rewrite_plan_target_files(
         group["target_files"] = _resolve_target_files_for_group(raw, group_findings, files)
 
 
+_MANIFEST_BASENAMES: frozenset[str] = frozenset(
+    s.lower()
+    for s in (
+        "requirements.txt",
+        "requirements.in",
+        "package.json",
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "go.mod",
+        "go.sum",
+        "pyproject.toml",
+        "poetry.lock",
+        "pipfile",
+        "pipfile.lock",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "bun.lock",
+        "bun.lockb",
+        "cargo.toml",
+        "cargo.lock",
+        "gemfile",
+        "gemfile.lock",
+        "composer.json",
+        "composer.lock",
+        "pom.xml",
+    )
+)
+
+
+def _file_key_basename(key: str) -> str:
+    return (key or "").replace("\\", "/").rstrip("/").split("/")[-1].lower()
+
+
+def _is_manifest_file_key(key: str) -> bool:
+    if not key or not str(key).strip():
+        return False
+    b = _file_key_basename(key)
+    return b in _MANIFEST_BASENAMES
+
+
+def _best_file_key(finding: dict, files: dict[str, str]) -> str:
+    if not isinstance(finding, dict):
+        return ""
+    key = resolve_path_to_canonical_key(finding.get("location", ""), files)
+    if key:
+        return key
+    inf = infer_paths_from_finding_text([finding], files, max_paths=1)
+    return inf[0] if inf else ""
+
+
+def _group_mixes_manifest_and_code(
+    idxs: list[int],
+    findings: list[dict],
+    files: dict[str, str],
+) -> bool:
+    has_m, has_c = False, False
+    for i in idxs:
+        if not isinstance(i, int) or not (0 <= i < len(findings)):
+            continue
+        key = _best_file_key(findings[i], files)
+        if _is_manifest_file_key(key):
+            has_m = True
+        else:
+            has_c = True
+        if has_m and has_c:
+            return True
+    return False
+
+
+def _risk_for_finding_indices(findings: list[dict], idxs: list[int]) -> str:
+    sev: list[str] = []
+    for i in idxs:
+        if 0 <= i < len(findings) and isinstance(findings[i], dict):
+            sev.append((findings[i].get("severity") or "").lower())
+    if any(x in ("critical", "high") for x in sev):
+        return "high"
+    if any(x == "medium" for x in sev):
+        return "medium"
+    return "low"
+
+
+def _coerce_findings_into_groups(
+    findings: list[dict],
+    files: dict[str, str],
+    max_per: int,
+) -> list[dict[str, Any]]:
+    """Deterministic re-batching: one bucket per (dep|code|unresolved) file, chunks of max_per."""
+    n = len(findings)
+    if n == 0:
+        return []
+    buckets: dict[tuple[str, str], list[int]] = defaultdict(list)
+    for i in range(n):
+        f = findings[i] if isinstance(findings[i], dict) else {}
+        key = _best_file_key(f, files)
+        if _is_manifest_file_key(key):
+            bkey: tuple[str, str] = ("dep", key)
+        elif key:
+            bkey = ("code", key)
+        else:
+            bkey = ("unres", "unresolved")
+        buckets[bkey].append(i)
+    for k in buckets:
+        buckets[k].sort()
+    dep_keys = sorted((k for k in buckets if k[0] == "dep"), key=lambda x: x[1].lower())
+    code_keys = sorted((k for k in buckets if k[0] == "code"), key=lambda x: x[1].lower())
+    unres_keys = [k for k in buckets if k[0] == "unres"]
+    ordered_keys = dep_keys + code_keys + unres_keys
+    groups: list[dict[str, Any]] = []
+    used_ids: set[str] = set()
+    for bkey in ordered_keys:
+        indices = buckets[bkey]
+        kind, path = bkey
+        for chunk_i in range(0, len(indices), max_per):
+            chunk = indices[chunk_i : chunk_i + max_per]
+            if kind == "unres":
+                base = "nolocation"
+            else:
+                base = _file_key_basename(path) or (path.split("/")[-1] if path else "group")
+            pref = "dep" if kind == "dep" else ("fix" if kind == "code" else "unres")
+            slug = "".join(
+                c if c.isalnum() else ("-" if c in "./\\" else "")
+                for c in base
+            )
+            while "--" in slug:
+                slug = slug.replace("--", "-")
+            slug = (slug.strip("-")[:40] or "file").lower()
+            chunk_num = 1 + chunk_i // max_per
+            if chunk_num == 1:
+                base_gid = f"{pref}-{slug}"
+            else:
+                base_gid = f"{pref}-{slug}-{chunk_num}"
+            gid = base_gid
+            dup = 0
+            while gid in used_ids:
+                dup += 1
+                gid = f"{base_gid}-d{dup}"
+            used_ids.add(gid)
+            first = findings[chunk[0]] if chunk and isinstance(findings[chunk[0]], dict) else {}
+            title = (first.get("title") or "security fix")[:60]
+            groups.append(
+                {
+                    "group_id": gid,
+                    "label": title,
+                    "finding_indices": chunk,
+                    "target_files": [],
+                    "risk_level": _risk_for_finding_indices(findings, chunk),
+                    "commit_message": f"fix(security): {title[:50]}",
+                    "rationale": (
+                        "Server-batched: max "
+                        f"{max_per} findings per group; dependency files separate from code."
+                    ),
+                }
+            )
+    return groups
+
+
+def _plan_needs_coercion(
+    groups: list[dict],
+    findings: list[dict],
+    files: dict[str, str],
+    max_per: int,
+) -> bool:
+    if not findings or len(findings) <= 1:
+        return False
+    n = len(findings)
+    valid_groups = groups or []
+    seen: set[int] = set()
+    for g in valid_groups:
+        for i in g.get("finding_indices") or []:
+            if not isinstance(i, int) or not (0 <= i < n):
+                return True
+            if i in seen:
+                return True
+            seen.add(i)
+    if seen != set(range(n)):
+        return True
+    if len(valid_groups) == 1 and n > 1:
+        return True
+    for g in valid_groups:
+        idxs = [i for i in (g.get("finding_indices") or []) if isinstance(i, int) and 0 <= i < n]
+        if len(idxs) > max_per:
+            return True
+        if _group_mixes_manifest_and_code(idxs, findings, files):
+            return True
+    return False
+
+
 def _finding_touches_target_files(
     finding: dict,
     target_keys: list[str],
@@ -221,6 +412,25 @@ def _finding_touches_target_files(
         return True
     for inf in infer_paths_from_finding_text([finding], files):
         if inf in key_set:
+            return True
+    return False
+
+
+def _should_narrow(
+    matched_path: str,
+    content: str,
+    group_findings: list[dict],
+    files: dict[str, str],
+) -> bool:
+    """Only use narrow cited-region excerpts for large files with explicit line citations."""
+    if len(content) <= 8_000:
+        return False
+    for f in group_findings:
+        if not isinstance(f, dict):
+            continue
+        if resolve_path_to_canonical_key(f.get("location", ""), files) != matched_path:
+            continue
+        if parse_line_number_from_location(f.get("location", "")) is not None:
             return True
     return False
 
@@ -524,10 +734,13 @@ async def plan_fixes_node(state: dict[str, Any]) -> dict[str, Any]:
     try:
         llm = get_llm(max_tokens=FIX_PLAN_MAX_TOKENS)
         structured = llm.with_structured_output(FixPlan)
-        plan: FixPlan = structured.invoke([
-            {"role": "system", "content": _PLAN_SYSTEM},
-            {"role": "user", "content": user_msg},
-        ])
+        plan: FixPlan = await asyncio.to_thread(
+            structured.invoke,
+            [
+                {"role": "system", "content": _PLAN_SYSTEM},
+                {"role": "user", "content": user_msg},
+            ],
+        )
     except Exception as exc:
         emit(fix_id, "error", f"Fix planning failed: {exc!s:.140}", branch="fix-planner")
         # Fallback: one group per finding
@@ -551,6 +764,27 @@ async def plan_fixes_node(state: dict[str, Any]) -> dict[str, Any]:
         )
 
     plan_dict = plan.model_dump()
+    if _plan_needs_coercion(
+        plan_dict.get("groups") or [],
+        findings,
+        files,
+        FIX_PLAN_MAX_FINDINGS_PER_GROUP,
+    ):
+        before_n = len(plan_dict.get("groups") or [])
+        plan_dict["groups"] = _coerce_findings_into_groups(
+            findings, files, FIX_PLAN_MAX_FINDINGS_PER_GROUP,
+        )
+        plan_dict["execution_order"] = [
+            g["group_id"] for g in plan_dict["groups"] if g.get("group_id")
+        ]
+        coerced_note = (
+            f"Server coerced the LLM plan ({before_n} -> {len(plan_dict['groups'])} groups): "
+            f"max {FIX_PLAN_MAX_FINDINGS_PER_GROUP} findings per group, "
+            f"dependency manifests not mixed with code, every finding included."
+        )
+        prior = (plan_dict.get("notes") or "").strip()
+        plan_dict["notes"] = f"{prior}\n{coerced_note}".strip() if prior else coerced_note
+        emit(fix_id, "info", coerced_note, branch="fix-planner")
     _rewrite_plan_target_files(plan_dict["groups"], findings, files)
     # Planner sometimes omits execution_order; default to declared group order.
     if not plan_dict.get("execution_order") and plan_dict.get("groups"):
@@ -731,7 +965,9 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
                         files,
                         full_file_max_chars=cap,
                         line_margin=FIX_PATCH_LINE_MARGIN,
-                        narrow_to_cited_region=True,
+                        narrow_to_cited_region=_should_narrow(
+                            matched_path, content, excerpt_findings, files
+                        ),
                     ),
                 )
             else:
@@ -810,10 +1046,18 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
                 sys_loc = _PATCH_LOCATE_SYSTEM + extra_loc
                 if attempt == 2:
                     sys_loc += _PATCH_LOCATE_RETRY_2
-                locate_bundle = locate_structured.invoke([
-                    {"role": "system", "content": sys_loc},
-                    {"role": "user", "content": user_msg},
-                ])
+                emit(
+                    fix_id, "info",
+                    f"{label}: LLM locate step (attempt {attempt + 1}/3)…",
+                    branch=f"fix-{group_id}",
+                )
+                locate_bundle = await asyncio.to_thread(
+                    locate_structured.invoke,
+                    [
+                        {"role": "system", "content": sys_loc},
+                        {"role": "user", "content": user_msg},
+                    ],
+                )
                 validated = _validated_locate_items(
                     locate_bundle.items, files, fallback_path,
                 )
@@ -826,6 +1070,21 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
                         branch=f"fix-{group_id}",
                     )
                     extra_loc += _PATCH_LOCATE_RETRY
+
+            locate_n = len(locate_bundle.items) if locate_bundle else 0
+            emit(
+                fix_id, "info",
+                f"{label}: locate found {len(validated)} verbatim regions "
+                f"from {locate_n} locate items",
+                branch=f"fix-{group_id}",
+            )
+            for section in file_sections:
+                first_line = (section.split("\n")[0] or "")[:120]
+                emit(
+                    fix_id, "info",
+                    f"{group_id}: file section: {first_line}",
+                    branch=f"fix-{group_id}",
+                )
 
             file_patches: list[FilePatch] = []
             note_parts: list[str] = []
@@ -860,10 +1119,18 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
                     sys_ed = _PATCH_EDIT_SYSTEM + extra_ed
                     if attempt == 2:
                         sys_ed += _PATCH_EDIT_RETRY_2
-                    edit_bundle = edit_structured.invoke([
-                        {"role": "system", "content": sys_ed},
-                        {"role": "user", "content": edit_user_msg},
-                    ])
+                    emit(
+                        fix_id, "info",
+                        f"{label}: LLM edit step (attempt {attempt + 1}/3)…",
+                        branch=f"fix-{group_id}",
+                    )
+                    edit_bundle = await asyncio.to_thread(
+                        edit_structured.invoke,
+                        [
+                            {"role": "system", "content": sys_ed},
+                            {"role": "user", "content": edit_user_msg},
+                        ],
+                    )
                     fp_list, trunc_bad, miss_bad = _merge_edits_to_file_patches(
                         validated,
                         edit_bundle.edits,
@@ -981,10 +1248,18 @@ async def review_patches_node(state: dict[str, Any]) -> dict[str, Any]:
     try:
         llm = get_llm(max_tokens=FIX_REVIEW_MAX_TOKENS)
         structured = llm.with_structured_output(PatchReview)
-        review: PatchReview = structured.invoke([
-            {"role": "system", "content": _REVIEW_SYSTEM},
-            {"role": "user", "content": user_msg},
-        ])
+        emit(
+            fix_id, "info",
+            "Calling model for patch review…",
+            branch="fix-reviewer",
+        )
+        review: PatchReview = await asyncio.to_thread(
+            structured.invoke,
+            [
+                {"role": "system", "content": _REVIEW_SYSTEM},
+                {"role": "user", "content": user_msg},
+            ],
+        )
     except Exception as exc:
         emit(fix_id, "warn", f"Patch review failed: {exc!s:.140}", branch="fix-reviewer")
         review = PatchReview(

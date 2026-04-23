@@ -157,7 +157,7 @@
   const FIX_ID = "{{ fix_id }}";
 
   const startedAt = Date.now();
-  let pollInterval = setInterval(poll, 1200);
+  let pollInterval = setInterval(poll, 600);
   let tickInterval = setInterval(tick, 1000);
   let lastSeq = 0;
   const allEvents = [];
@@ -188,6 +188,7 @@
       if (ev.seq && ev.seq <= lastSeq) continue;
       allEvents.push(ev);
       list.appendChild(renderEventRow(ev));
+      if (ev.seq) lastSeq = ev.seq;
     }
     if (atBottom) list.scrollTop = list.scrollHeight;
   }
@@ -283,9 +284,6 @@
     
     if (data.events) {
       renderEvents(data.events);
-      if (data.events.length > 0) {
-        lastSeq = data.events[data.events.length - 1].seq || lastSeq;
-      }
     }
 
     if (data.error) {
@@ -299,8 +297,28 @@
     }
 
     const working = document.getElementById('working-label');
+    const st = document.getElementById('status-label');
     if (data.status === 'running') {
-      working.textContent = 'Agent is planning and generating patches…';
+      if (st && st.textContent.indexOf('Initializing') !== -1) {
+        st.innerHTML = 'In progress <span class="elapsed" id="elapsed">0s</span>';
+      }
+      if (data.events && data.events.length) {
+        const last = data.events[data.events.length - 1];
+        const b = String(last.branch || 'fix');
+        if (b === 'fix-planner') {
+          working.textContent = 'Planning fix batches…';
+        } else if (b === 'fix-reviewer') {
+          working.textContent = 'Reviewing generated patches…';
+        } else if (b === 'fix' && (last.text || '').indexOf('Loading') !== -1) {
+          working.textContent = 'Loading scan context…';
+        } else {
+          let short = b;
+          while (short.startsWith('fix-')) short = short.slice(4);
+          working.textContent = 'Generating patches — ' + short + '…';
+        }
+      } else {
+        working.textContent = 'Starting fix agent…';
+      }
     }
 
     if (data.status === 'done') {

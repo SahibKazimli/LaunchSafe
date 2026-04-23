@@ -36,16 +36,48 @@ class FilePatch(BaseModel):
     )
     diff: str = Field(
         default="",
-        description=(
-            "Unified diff (--- a/path, +++ b/path, @@ lines) showing "
-            "exactly what changed.  Generate this yourself from the "
-            "original and patched snippets."
-        ),
+        description="Unified diff; computed server-side from snippets.",
     )
     explanation: str = Field(
         default="",
         description="One sentence: what was changed and why it fixes the issue.",
     )
+
+
+class PatchLocateRow(BaseModel):
+    """Step 1 — identify an exact region to replace (no patched code yet)."""
+
+    path: str = Field(description="Repo path matching an ### heading in ORIGINAL FILES")
+    original_snippet: str = Field(
+        description="Exact contiguous copy from ORIGINAL FILES; must be a verbatim substring.",
+    )
+
+
+class PatchLocateBundle(BaseModel):
+    """Step 1 output: one or more regions to fix."""
+
+    items: list[PatchLocateRow] = Field(default_factory=list)
+    notes: str = Field(default="", description="Findings you could not map to a verbatim region.")
+
+
+class PatchEditRow(BaseModel):
+    """Step 2 — replacement for one locate row (index matches Step 1 list order)."""
+
+    index: int = Field(ge=0, description="0-based index into the LOCATE list from the user message")
+    patched_snippet: str = Field(
+        description="Full replacement for that row's original_snippet; complete and syntactically valid.",
+    )
+    explanation: str = Field(
+        default="",
+        description="One sentence: what changed and why it fixes the issue.",
+    )
+
+
+class PatchEditBundle(BaseModel):
+    """Step 2 output."""
+
+    edits: list[PatchEditRow] = Field(default_factory=list)
+    notes: str = Field(default="", description="Caveats or indices you could not patch.")
 
 
 class FixGroup(BaseModel):
@@ -107,7 +139,7 @@ class FixPlan(BaseModel):
 
 
 class PatchResult(BaseModel):
-    """Output of one fix worker — patches for one group."""
+    """Output of one fix worker — patches for one group (after validation + diffs)."""
 
     group_id: str
     patches: list[FilePatch] = Field(default_factory=list)

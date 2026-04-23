@@ -17,9 +17,11 @@ from agents.llm import get_llm
 from agents.runtime_log import emit
 from core.config import (
     FIX_GROUP_MAX_FILES,
+    FIX_PATCH_FILE_PROMPT_MAX_CHARS,
+    FIX_PATCH_GROUP_CONTEXT_MAX_CHARS,
+    FIX_PATCH_LINE_MARGIN,
     FIX_PATCH_MAX_TOKENS,
     FIX_PLAN_MAX_TOKENS,
-    FIX_PROMPT_FULL_FILE_MAX_CHARS,
     FIX_REVIEW_MAX_TOKENS,
 )
 from core import scan_store as _ss
@@ -36,15 +38,22 @@ from .fix_state import (
     FilePatch,
     FixGroup,
     FixPlan,
+    PatchEditBundle,
+    PatchEditRow,
+    PatchLocateBundle,
+    PatchLocateRow,
     PatchResult,
     PatchReview,
 )
 
 from agents.prompts.fix_prompts import (
-    PATCH_RETRY_TAIL as _PATCH_RETRY_TAIL,
-    PATCH_RETRY_TAIL_2 as _PATCH_RETRY_TAIL_2,
-    PATCH_RETRY_TRUNCATION as _PATCH_RETRY_TRUNCATION,
-    PATCH_SYSTEM as _PATCH_SYSTEM,
+    PATCH_EDIT_RETRY as _PATCH_EDIT_RETRY,
+    PATCH_EDIT_RETRY_2 as _PATCH_EDIT_RETRY_2,
+    PATCH_EDIT_RETRY_GROUNDING as _PATCH_EDIT_RETRY_GROUNDING,
+    PATCH_EDIT_SYSTEM as _PATCH_EDIT_SYSTEM,
+    PATCH_LOCATE_RETRY as _PATCH_LOCATE_RETRY,
+    PATCH_LOCATE_RETRY_2 as _PATCH_LOCATE_RETRY_2,
+    PATCH_LOCATE_SYSTEM as _PATCH_LOCATE_SYSTEM,
     PLAN_SYSTEM as _PLAN_SYSTEM,
     REVIEW_SYSTEM as _REVIEW_SYSTEM,
 )
@@ -63,16 +72,16 @@ def _expand_target_keys_for_group(
     """
     merged: list[str] = []
     seen: set[str] = set()
-    for k in base_keys:
-        if k in files and k not in seen:
-            merged.append(k)
-            seen.add(k)
+    for key in base_keys:
+        if key in files and key not in seen:
+            merged.append(key)
+            seen.add(key)
         if len(merged) >= max_files:
             return merged
-    for k in resolve_paths_for_findings(group_findings, files):
-        if k in files and k not in seen:
-            merged.append(k)
-            seen.add(k)
+    for key in resolve_paths_for_findings(group_findings, files):
+        if key in files and key not in seen:
+            merged.append(key)
+            seen.add(key)
         if len(merged) >= max_files:
             break
     return merged
@@ -80,9 +89,9 @@ def _expand_target_keys_for_group(
 
 def _finding_blob_for_hints(findings: list[dict]) -> str:
     return " ".join(
-        f"{f.get('title', '')} {f.get('description', '')} {f.get('fix', '')}"
-        for f in findings
-        if isinstance(f, dict)
+        f"{finding.get('title', '')} {finding.get('description', '')} {finding.get('fix', '')}"
+        for finding in findings
+        if isinstance(finding, dict)
     ).lower()
 
 
@@ -313,40 +322,50 @@ def _batch_has_substantive_patches(patch_results: list[dict]) -> bool:
 _SEVERITY_FULL_FILE = frozenset({"medium", "high", "critical"})
 
 
-def _format_full_report_context(sess: dict[str, Any]) -> str:
-    """Full-scan report text so patch LLM aligns with audit, not ad-hoc edits."""
+def _format_group_report_context(
+    sess: dict[str, Any],
+    group_findings: list[dict],
+    report_full: list[dict],
+    max_chars: int = FIX_PATCH_GROUP_CONTEXT_MAX_CHARS,
+) -> str:
+    """Slim audit text: this group’s findings only (saves input tokens vs full report)."""
     lines = [
-        "## Full audit report (entire scan — use to align code changes with reported issues)",
-        f"Grade: {sess.get('report_grade', '?')}",
+        "## Audit context (this fix group only)",
+        f"Scan grade: {sess.get('report_grade', '?')} | "
         f"Overall risk: {sess.get('report_overall_risk', '')}",
-        f"Executive summary: {sess.get('report_summary', '')}",
     ]
-    top = sess.get("report_top_fixes") or []
-    if top:
-        lines.append("Top fixes from synthesize:")
-        for item in top[:12]:
-            lines.append(f"  - {item}")
-    full = sess.get("report_findings_full") or []
-    lines.append(f"\nAll {len(full)} finding(s) on this scan (index matches report order):")
-    for idx, group_finding in enumerate(full):
-        if not isinstance(group_finding, dict):
+    lines.append(f"Findings in this group ({len(group_findings)}); [report #] ties to scan list:")
+    rf = report_full or []
+    for finding in group_findings:
+        if not isinstance(finding, dict):
             continue
-        sev = group_finding.get("severity", "?")
+        ri = _report_index_for_finding(finding, rf)
         lines.append(
-            f"  [{idx}] ({sev}) {group_finding.get('title', '')} "
-            f"@ {group_finding.get('location', '')}"
+            f"- [report #{ri}] ({finding.get('severity', '?')}) "
+            f"{finding.get('title', '?')} @ {finding.get('location', '?')}"
         )
-        desc = (group_finding.get("description") or "").strip()
+        desc = (finding.get("description") or "").strip()
         if desc:
-            lines.append(f"      Detail: {desc[:280]}")
-        fx = (group_finding.get("fix") or "").strip()
+            lines.append(f"  Detail: {desc[:480]}")
+        fx = (finding.get("fix") or "").strip()
         if fx:
-            lines.append(f"      Report remediation: {fx[:400]}")
+            lines.append(f"  Remediation: {fx[:720]}")
     text = "\n".join(lines)
-    cap = 32_000
-    if len(text) > cap:
-        return text[:cap] + "\n...[report context truncated]\n"
+    if len(text) > max_chars:
+        return text[:max_chars] + "\n...[group context truncated]\n"
     return text
+
+
+def _original_snippet_in_file(original: str, content: str) -> bool:
+    """True if original appears verbatim in file (normalize CRLF)."""
+    o = original or ""
+    if not o.strip():
+        return False
+    if o in content:
+        return True
+    on = o.replace("\r\n", "\n")
+    cn = (content or "").replace("\r\n", "\n")
+    return on in cn
 
 
 def _file_has_medium_plus_finding(
@@ -549,6 +568,82 @@ def _make_diff(path: str, original: str, patched: str) -> str:
     return "".join(diff)
 
 
+def _validated_locate_items(
+    items: list[PatchLocateRow],
+    files: dict[str, str],
+    fallback_path: str,
+) -> list[tuple[str, str]]:
+    """Return (canonical_path, original_snippet) pairs verified as substrings of file."""
+    out: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for it in items:
+        p = (it.path or "").strip() or fallback_path
+        matched_key, content = find_file_content(p, files)
+        orig = it.original_snippet or ""
+        if not content or not orig.strip():
+            continue
+        if not _original_snippet_in_file(orig, content):
+            continue
+        key = (matched_key or p, orig)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((matched_key or p, orig))
+    return out
+
+
+def _format_locate_targets_for_edit(validated: list[tuple[str, str]]) -> str:
+    blocks: list[str] = []
+    for i, (path, orig) in enumerate(validated):
+        blocks.append(
+            f"#### LOCATE TARGET [{i}] path=`{path}`\n"
+            f"original_snippet (replace this exact block):\n```\n{orig}\n```"
+        )
+    return "\n\n".join(blocks)
+
+
+def _merge_edits_to_file_patches(
+    validated: list[tuple[str, str]],
+    edits: list[PatchEditRow],
+    files: dict[str, str],
+) -> tuple[list[FilePatch], bool, bool]:
+    """Merge step-2 edits with validated locates.
+
+    Returns (file_patches, had_truncation_reject, had_missing_edit_index).
+    """
+    by_idx: dict[int, PatchEditRow] = {}
+    for e in edits:
+        by_idx[e.index] = e
+    out: list[FilePatch] = []
+    trunc = False
+    missing = False
+    for idx, (path, orig_s) in enumerate(validated):
+        if idx not in by_idx:
+            missing = True
+            continue
+        row = by_idx[idx]
+        pat_raw = row.patched_snippet or ""
+        if not pat_raw.strip() or orig_s.strip() == pat_raw.strip():
+            continue
+        probe = {"original_snippet": orig_s, "patched_snippet": pat_raw}
+        if _patch_looks_incomplete_or_truncated(probe):
+            trunc = True
+            continue
+        _, c = find_file_content(path, files)
+        if not c or not _original_snippet_in_file(orig_s, c):
+            continue
+        out.append(
+            FilePatch(
+                path=path,
+                original_snippet=orig_s,
+                patched_snippet=pat_raw,
+                diff=_make_diff(path, orig_s, pat_raw),
+                explanation=row.explanation or "",
+            ),
+        )
+    return out, trunc, missing
+
+
 async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
     """Generate patches for each fix group sequentially."""
     fix_id = state.get("fix_id", "")
@@ -575,7 +670,6 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
     from core import fix_store as _fs_fix
 
     fix_sess = _fs_fix.get_fix_session(fix_id) or {}
-    report_context = _format_full_report_context(fix_sess)
     report_full_list = list(fix_sess.get("report_findings_full") or [])
 
     for group in ordered:
@@ -611,15 +705,19 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
         doc_only_findings = [f for f in group_findings if f not in code_findings]
         excerpt_findings = code_findings if code_findings else group_findings
 
+        report_context = _format_group_report_context(
+            fix_sess, group_findings, report_full_list,
+        )
+
         file_sections = []
         missing_files = []
         for path in target_keys:
             matched_path, content = find_file_content(path, files)
             if content:
-                cap = FIX_PROMPT_FULL_FILE_MAX_CHARS
+                # Cap whole-file paste so input leaves room for structured output.
+                cap = FIX_PATCH_FILE_PROMPT_MAX_CHARS
                 if _file_has_medium_plus_finding(matched_path, excerpt_findings, files):
-                    # Always pass the full ingested file for medium+ issues on this path
-                    cap = max(cap, len(content) + 128)
+                    cap = min(max(cap, len(content) + 64), FIX_PATCH_FILE_PROMPT_MAX_CHARS)
                 file_sections.append(
                     build_excerpt_for_fix_prompt(
                         matched_path,
@@ -627,6 +725,8 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
                         excerpt_findings,
                         files,
                         full_file_max_chars=cap,
+                        line_margin=FIX_PATCH_LINE_MARGIN,
+                        narrow_to_cited_region=True,
                     ),
                 )
             else:
@@ -678,8 +778,8 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
             f"---\n"
             f"## Your task (this fix group only)\n"
             f"Implement patches that satisfy the **FINDINGS TO FIX** section below, "
-            f"using the **Report remediation** lines from the audit where present. "
-            f"Indices in brackets refer to the full report list above.\n\n"
+            f"using the **Remediation** lines where present. "
+            f"[report #N] matches the scan’s finding order.\n\n"
             f"FIX GROUP: {group.get('label', group_id)}\n"
             f"Commit message: {group.get('commit_message', '')}\n"
             f"Risk level: {group.get('risk_level', 'medium')}\n\n"
@@ -709,87 +809,112 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
 
         try:
             llm = get_llm(max_tokens=FIX_PATCH_MAX_TOKENS)
-            structured = llm.with_structured_output(PatchResult)
             fallback_path = target_keys[0] if target_keys else "file"
 
-            def _backfill_patch_diffs(res: PatchResult) -> None:
-                """Always derive unified diff from snippets (overwrites hollow LLM diffs)."""
-                for patch in res.patches:
-                    o = patch.original_snippet or ""
-                    s = patch.patched_snippet or ""
-                    if o.strip() and s.strip():
-                        use_path = (patch.path or "").strip() or fallback_path
-                        patch.diff = _make_diff(use_path, o, s)
-
-            def _kept_patches_from_result(res: PatchResult) -> tuple[list[dict], list[dict]]:
-                """Return (substantive patches, kept patches that pass structural checks)."""
-                substantive: list[dict] = []
-                kept: list[dict] = []
-                for p in res.patches:
-                    d = p.model_dump()
-                    if not isinstance(d, dict) or not _patch_dict_is_substantive(d):
-                        continue
-                    substantive.append(d)
-                    if not _patch_looks_incomplete_or_truncated(d):
-                        kept.append(d)
-                return substantive, kept
-
-            extra_sys = ""
-            result: PatchResult | None = None
+            # ── Step 1: locate verbatim regions ─────────────────────────
+            locate_structured = llm.with_structured_output(PatchLocateBundle)
+            extra_loc = ""
+            locate_bundle: PatchLocateBundle | None = None
+            validated: list[tuple[str, str]] = []
             for attempt in range(3):
-                sys_content = _PATCH_SYSTEM + extra_sys
+                sys_loc = _PATCH_LOCATE_SYSTEM + extra_loc
                 if attempt == 2:
-                    sys_content += _PATCH_RETRY_TAIL_2
-                result = structured.invoke([
-                    {"role": "system", "content": sys_content},
+                    sys_loc += _PATCH_LOCATE_RETRY_2
+                locate_bundle = locate_structured.invoke([
+                    {"role": "system", "content": sys_loc},
                     {"role": "user", "content": user_msg},
                 ])
-                _backfill_patch_diffs(result)
-                if not has_file_content:
-                    break
-                substantive, kept = _kept_patches_from_result(result)
-                if kept:
+                validated = _validated_locate_items(
+                    locate_bundle.items, files, fallback_path,
+                )
+                if validated:
                     break
                 if attempt < 2:
-                    if substantive:
-                        emit(
-                            fix_id, "warn",
-                            f"{label}: patch snippets incomplete or truncated — retry {attempt + 1}/2",
-                            branch=f"fix-{group_id}",
-                        )
-                        extra_sys += _PATCH_RETRY_TRUNCATION
-                    else:
-                        emit(
-                            fix_id, "warn",
-                            f"{label}: patch model returned no substantive edits — retry {attempt + 1}/2",
-                            branch=f"fix-{group_id}",
-                        )
-                        extra_sys += _PATCH_RETRY_TAIL
+                    emit(
+                        fix_id, "warn",
+                        f"{label}: locate step — no verbatim regions (retry {attempt + 1}/2)",
+                        branch=f"fix-{group_id}",
+                    )
+                    extra_loc += _PATCH_LOCATE_RETRY
 
-            _backfill_patch_diffs(result)
-            payload = result.model_dump()
-            payload["group_id"] = group_id
-            substantive, kept = _kept_patches_from_result(
-                PatchResult.model_validate({**payload, "group_id": group_id}),
-            )
-            payload["patches"] = kept
-            if has_file_content and substantive and not kept:
-                payload["notes"] = (
-                    (payload.get("notes") or "").strip()
-                    + " Patches were discarded: truncated or structurally incomplete "
-                    "(unbalanced braces/parens or unterminated string)."
-                ).strip()
-            elif has_file_content and not kept:
-                hint = (
-                    " No substantive patch produced after retries "
-                    "(model may have focused on doc-only findings)."
+            file_patches: list[FilePatch] = []
+            note_parts: list[str] = []
+            if locate_bundle:
+                note_parts.append((locate_bundle.notes or "").strip())
+
+            if not validated:
+                hint = " Step 1 produced no snippets that match file text verbatim."
+                merged_notes = f"{' '.join(n for n in note_parts if n)}{hint}".strip()
+                result = PatchResult(
+                    group_id=group_id,
+                    patches=[],
+                    notes=merged_notes,
                 )
-                payload["notes"] = (payload.get("notes") or "").strip() + hint
-            result = PatchResult.model_validate(payload)
+            else:
+                # ── Step 2: patched_snippet per index ───────────────────
+                locate_block = _format_locate_targets_for_edit(validated)
+                edit_user_msg = (
+                    f"{report_context}\n\n"
+                    f"---\n"
+                    f"## Step 2 — apply fixes (this group only)\n"
+                    f"FIX GROUP: {group.get('label', group_id)}\n"
+                    f"Commit message: {group.get('commit_message', '')}\n"
+                    f"Risk level: {group.get('risk_level', 'medium')}\n\n"
+                    f"FINDINGS TO FIX (group):\n{finding_text}\n\n"
+                    f"LOCATE TARGETS (indices 0..{len(validated) - 1}):\n{locate_block}\n\n"
+                    f"ORIGINAL FILES (same excerpts as step 1):\n{files_text}"
+                )
+                edit_structured = llm.with_structured_output(PatchEditBundle)
+                extra_ed = ""
+                edit_bundle: PatchEditBundle | None = None
+                for attempt in range(3):
+                    sys_ed = _PATCH_EDIT_SYSTEM + extra_ed
+                    if attempt == 2:
+                        sys_ed += _PATCH_EDIT_RETRY_2
+                    edit_bundle = edit_structured.invoke([
+                        {"role": "system", "content": sys_ed},
+                        {"role": "user", "content": edit_user_msg},
+                    ])
+                    fp_list, trunc_bad, miss_bad = _merge_edits_to_file_patches(
+                        validated,
+                        edit_bundle.edits,
+                        files,
+                    )
+                    if fp_list:
+                        file_patches = fp_list
+                        break
+                    if attempt < 2:
+                        emit(
+                            fix_id, "warn",
+                            f"{label}: edit step — no validated patches (retry {attempt + 1}/2)",
+                            branch=f"fix-{group_id}",
+                        )
+                        if trunc_bad:
+                            extra_ed += _PATCH_EDIT_RETRY
+                        elif miss_bad:
+                            extra_ed += _PATCH_EDIT_RETRY_GROUNDING
+                        else:
+                            extra_ed += _PATCH_EDIT_RETRY
+
+                if edit_bundle:
+                    note_parts.append((edit_bundle.notes or "").strip())
+                merged_notes = " ".join(n for n in note_parts if n).strip()
+                if not file_patches and validated:
+                    merged_notes = (
+                        f"{merged_notes} Step 2 did not yield complete patches "
+                        f"(truncation, missing indices, or empty edits)."
+                    ).strip()
+
+            result = PatchResult(
+                group_id=group_id,
+                patches=file_patches,
+                notes=merged_notes,
+            )
 
             emit(
                 fix_id, "branch_done",
-                f"{label}: {len(result.patches)} substantive file patch(es)",
+                f"{label}: {len(result.patches)} validated file patch(es) "
+                f"(2-step locate+edit)",
                 branch=f"fix-{group_id}",
             )
             all_results.append(result.model_dump())

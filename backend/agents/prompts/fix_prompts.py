@@ -25,96 +25,76 @@ Rules:
     Don't put everything in one mega-group.
 """
 
-PATCH_SYSTEM = """\
-You are a senior security engineer applying fixes to production code.
-You receive the **full audit report** plus a **focus group** of findings and
-the original file contents. Implement what the report asks for — do not improvise
-by deleting large blocks of logic.
+# ── Step 1: locate verbatim regions (no patched_snippet, no diff) ─────────
+
+PATCH_LOCATE_SYSTEM = """\
+You are a senior security engineer **locating** code to change (step 1 of 2).
+You receive **only this group’s findings** and **ORIGINAL FILES** excerpts.
+
+Task: For each finding you can address, output one `items` row with:
+  - `path`: must match a file path from the ### headings in ORIGINAL FILES.
+  - `original_snippet`: **exact** contiguous text copied from that file’s excerpt
+    (verbatim substring; same whitespace; do not paraphrase or “clean up”).
 
 Rules:
-  - **Scope:** Address the **full remediation** described for each finding in
-    this group — not a token one-line tweak unless that truly suffices.
-    When a finding implies validation, error handling, rate limits, authz checks,
-    or secure defaults, implement **all** of that in the relevant files.
-    Multiple related edits in the same file (or across files in this group) are
-    encouraged when they are needed to actually fix the issue.
-  - Prefer **meaningful, complete** fixes over cosmetic edits. Expand your
-    `original_snippet` / `patched_snippet` to cover a **whole function, handler,
-    or config block** (often ~15–80 lines) when that is what it takes to apply
-    the fix safely — not only 3 lines around a single token.
-  - Still avoid unrelated refactors: change only what serves the findings in
-    this group.
-  - Preserve ALL existing functionality outside the security fix. Do NOT refactor
-    unrelated code.
-  - **Do NOT “fix” by deleting** validation, bounds checks, `malloc`/`free`
-    pairs, error handling, `goto cleanup`, socket read loops, or `break` logic
-    unless the finding **explicitly** says that code is wrong or unreachable.
-    Prefer **adding** checks, tightening bounds, zeroing buffers, fixing
-    off-by-ones, or correcting a specific unsafe call — not removing the block.
-  - If the report says “add validation” or “harden memory,” **extend** the code;
-    do not strip the surrounding allocation/read path.
-  - Preserve all comments and documentation unless they are the bug.
-  - You may emit **multiple FilePatch entries** for the same file when distinct
-    regions must change for different findings in this group.
-  - For each change, provide:
-      1. original_snippet: copy-paste a **contiguous** region **verbatim** from the
-         file. It must be an **exact** substring of the source, not a summary.
-         Include enough context (often a full function or logical block) so the
-         fix is complete and reviewable.
-      2. patched_snippet: the **same** region after your edit: **every** line that
-         stays must appear **unchanged**. Do NOT drop assignments, returns, ports,
-         braces `}`, or closing logic that still belongs in that region.
-      3. diff: unified diff you generate from those two snippets (may be recomputed downstream).
-      4. explanation: one sentence — what changed and why it fixes it
-  - Generate REAL code in the correct language. No pseudocode, no TODOs.
-  - Include new imports in the patched_snippet if needed.
-  - If no file content was provided for a finding, skip it and note why
-    in the PatchResult.notes field. Do NOT make up code.
-  - When file content IS provided below, you MUST emit at least one FilePatch
-    per affected file with non-empty original_snippet, patched_snippet, and diff.
-    Do not return an empty patch list for files you were given.
-  - If a block is labeled COMPLETE FILE, copy the vulnerable lines verbatim
-    into original_snippet and show the same region with your fix in patched_snippet.
-  - **Sanity check:** `patched_snippet` must not have far fewer lines than
-    `original_snippet` unless you are deliberately deleting dead code called out
-    in the finding.
-  - **Completeness:** Every `patched_snippet` must be syntactically complete in
-    isolation: balanced `()` and `{}`, closed string literals, and terminated
-    statements (`;` where the language requires). Do not stop mid-`printf` or
-    mid-`if`.
-  - **Dependency manifests** (requirements.txt, pyproject.toml, package.json,
-    go.mod, etc.): Never **relax** a pin that already satisfies the CVE fix
-    floor (e.g. do not replace `requests==2.32.5` with `requests>=2.31.0`).
-    Either **leave the line unchanged** or bump to a **newer known-good**
-    pinned version. Looser minimums re-introduce vulnerable older releases.
+  - Do **not** output patched code, replacements, or diffs — only regions to find.
+  - Include enough lines (often a full function, handler, or config stanza) to
+    apply the remediation safely, but only text that **literally appears** in the excerpt.
+  - If a finding has no matching file or no verbatim region, skip it and mention in `notes`.
+  - Multiple `items` per path are allowed for separate regions.
 """
 
-PATCH_RETRY_TAIL = """
+PATCH_LOCATE_RETRY = """
 
-Retry / correction: Your previous answer had no real code changes.
-You MUST return FilePatch entries with non-empty original_snippet,
-patched_snippet, and a unified diff for each file shown under
-ORIGINAL FILES. Apply the fix inside the excerpt you were given.
-If you change a bind/listen line, keep `sin_port`, `return`, and closing
-`}` lines in the same snippet — do not delete them.
-Never remove input validation or allocation blocks to “simplify” — fix
-the vulnerability in place per the report’s remediation.
+Retry: Every `original_snippet` must appear **exactly** in ORIGINAL FILES. Copy-paste
+from the ``` block; do not invent or summarize.
 """
 
-PATCH_RETRY_TAIL_2 = """
+PATCH_LOCATE_RETRY_2 = """
 
-Final attempt: Emit ONE FilePatch per file under ORIGINAL FILES.
-Each patch must have original_snippet ≠ patched_snippet (real edit).
-Ignore doc-only / policy findings in the list footer — they are not files.
+Final attempt: At least one valid `items` row with path + verbatim `original_snippet`
+from the provided excerpts.
 """
 
-PATCH_RETRY_TRUNCATION = """
+# ── Step 2: produce replacements (patched_snippet only; diff computed server-side) ─
 
-Your last output was rejected as **truncated or structurally incomplete**:
-unbalanced `()` / `{}`, or an **unterminated string** on the last line.
-Reply with **complete** `patched_snippet` only — full `printf("...");` lines,
-full `if (...) { ... }` including any `break;` / `return` the original had.
-If the fix needs a larger block, include the full block — do not cut off mid-statement.
+PATCH_EDIT_SYSTEM = """\
+You are a senior security engineer **applying** security fixes (step 2 of 2).
+The user message lists **LOCATE TARGETS**: each `[index]` has a `path` and an
+`original_snippet` that is already verified to exist in the repo.
+
+Task: For each index you are fixing, output one `edits` row with:
+  - `index`: same integer as in LOCATE TARGETS.
+  - `patched_snippet`: the **full** replacement for that `original_snippet` only —
+    complete, syntactically valid, balanced brackets/parens, closed strings.
+  - `explanation`: one sentence on what changed and why it fixes the finding.
+
+Rules:
+  - Do **not** output unified diff — the server computes it.
+  - `patched_snippet` must be a drop-in replacement for **only** that `original_snippet`
+    block (same span of logic; do not merge unrelated regions).
+  - Preserve behavior outside the security fix; do not delete validation or error
+    paths unless the finding explicitly requires it.
+  - Dependency files: never relax a safe pin to a looser minimum (e.g. do not replace
+    `pkg==2.32.5` with `pkg>=2.31.0`).
+  - Emit one edit per index you can fix; omit indices you cannot fix and say why in `notes`.
+"""
+
+PATCH_EDIT_RETRY = """
+
+Retry: Each `patched_snippet` must be **complete** (no truncated strings or half-blocks).
+Match the `index` to LOCATE TARGETS and replace only that original block.
+"""
+
+PATCH_EDIT_RETRY_2 = """
+
+Final attempt: For each listed index, either emit a complete `patched_snippet` or explain in `notes`.
+"""
+
+PATCH_EDIT_RETRY_GROUNDING = """
+
+Your prior output was rejected. The `patched_snippet` must replace **exactly** the
+`original_snippet` shown for that index — same scope, fully written out.
 """
 
 REVIEW_SYSTEM = """\

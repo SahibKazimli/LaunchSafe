@@ -79,6 +79,87 @@ def _rewrite_plan_target_files(
         group["target_files"] = _resolve_target_files_for_group(raw, group_findings, files)
 
 
+def _finding_touches_target_files(
+    finding: dict,
+    target_keys: list[str],
+    files: dict[str, str],
+) -> bool:
+    """True if this finding maps to a file we are patching in this group."""
+    if not target_keys:
+        return False
+    key_set = set(target_keys)
+    k = resolve_path_to_canonical_key(finding.get("location", ""), files)
+    if k in key_set:
+        return True
+    for inf in infer_paths_from_finding_text([finding], files):
+        if inf in key_set:
+            return True
+    return False
+
+
+def _format_findings_for_patch_prompt(
+    primary: list[dict],
+    doc_only: list[dict],
+) -> str:
+    """Separate repo-backed findings from doc-only / no-file noise for the patch LLM."""
+    chunks: list[str] = []
+    if primary:
+        chunks.append(
+            "\n".join(
+                f"- ({f.get('severity', '?')}) {f.get('title', '?')} "
+                f"@ {f.get('location', '?')}\n"
+                f"  Description: {(f.get('description', '') or '')[:300]}\n"
+                f"  Suggested fix: {(f.get('fix', '') or '')[:400]}"
+                for f in primary
+            )
+        )
+    if doc_only:
+        chunks.append(
+            "---\nThese findings have **no matching source file** in this scan "
+            "(e.g. missing policy URL). Do **not** emit FilePatch for them; "
+            "only fix the files in ORIGINAL FILES above. You may mention them "
+            "in PatchResult.notes:\n"
+            + "\n".join(
+                f"- ({f.get('severity', '?')}) {f.get('title', '?')} "
+                f"@ {f.get('location', '?')}"
+                for f in doc_only
+            )
+        )
+    return "\n\n".join(chunks) if chunks else "(no findings)"
+
+
+def _patch_dict_is_substantive(patch: dict) -> bool:
+    """True if a patch has a real change (snippets differ or diff has +/- lines)."""
+    o = (patch.get("original_snippet") or "").strip()
+    s = (patch.get("patched_snippet") or "").strip()
+    d = (patch.get("diff") or "").strip()
+    if o and s and o != s:
+        return True
+    for line in d.splitlines():
+        if line.startswith("+++ ") or line.startswith("--- ") or line.startswith("@@"):
+            continue
+        if line.startswith("+") and not line.startswith("+++"):
+            return True
+        if line.startswith("-") and not line.startswith("---"):
+            return True
+    return False
+
+
+def _patch_result_has_body(result: PatchResult) -> bool:
+    for p in result.patches:
+        if _patch_dict_is_substantive(p.model_dump()):
+            return True
+    return False
+
+
+def _batch_has_substantive_patches(patch_results: list[dict]) -> bool:
+    for pr in patch_results:
+        for p in pr.get("patches") or []:
+            if isinstance(p, dict) and _patch_dict_is_substantive(p):
+                return True
+    return False
+
+
 # Node 1: Load Context   
 
 
@@ -305,17 +386,11 @@ _PATCH_RETRY_TAIL = (
     "`}` lines in the same snippet — do not delete them."
 )
 
-
-def _patch_result_has_body(result: PatchResult) -> bool:
-    for p in result.patches:
-        o = (p.original_snippet or "").strip()
-        s = (p.patched_snippet or "").strip()
-        d = (p.diff or "").strip()
-        if o and s:
-            return True
-        if len(d) > 40:
-            return True
-    return False
+_PATCH_RETRY_TAIL_2 = (
+    "\n\nFinal attempt: Emit ONE FilePatch per file under ORIGINAL FILES. "
+    "Each patch must have original_snippet ≠ patched_snippet (real edit). "
+    "Ignore doc-only / policy findings in the list footer — they are not files."
+)
 
 
 def _make_diff(path: str, original: str, patched: str) -> str:
@@ -373,6 +448,13 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
             raw_targets, group_findings, files,
         )
 
+        code_findings = [
+            f for f in group_findings
+            if _finding_touches_target_files(f, target_keys, files)
+        ]
+        doc_only_findings = [f for f in group_findings if f not in code_findings]
+        excerpt_findings = code_findings if code_findings else group_findings
+
         file_sections = []
         missing_files = []
         for path in target_keys:
@@ -382,7 +464,7 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
                     build_excerpt_for_fix_prompt(
                         matched_path,
                         content,
-                        group_findings,
+                        excerpt_findings,
                         files,
                         full_file_max_chars=FIX_PROMPT_FULL_FILE_MAX_CHARS,
                     ),
@@ -399,14 +481,12 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
 
         has_file_content = bool(file_sections)
 
-        # Build the prompt
-        finding_text = "\n".join(
-            f"- ({finding.get('severity', '?')}) {finding.get('title', '?')} "
-            f"@ {finding.get('location', '?')}\n"
-            f"  Description: {(finding.get('description', '') or '')[:300]}\n"
-            f"  Suggested fix: {(finding.get('fix', '') or '')[:400]}"
-            for finding in group_findings
-        )
+        if code_findings:
+            finding_text = _format_findings_for_patch_prompt(
+                code_findings, doc_only_findings,
+            )
+        else:
+            finding_text = _format_findings_for_patch_prompt(group_findings, [])
 
         if has_file_content:
             files_text = "\n\n".join(file_sections)
@@ -441,11 +521,25 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
             if has_file_content and not _patch_result_has_body(result):
                 emit(
                     fix_id, "warn",
-                    f"{label}: patch model returned empty bodies — one retry",
+                    f"{label}: patch model returned empty bodies — retry 1/2",
                     branch=f"fix-{group_id}",
                 )
                 result = structured.invoke([
                     {"role": "system", "content": _PATCH_SYSTEM + _PATCH_RETRY_TAIL},
+                    {"role": "user", "content": user_msg},
+                ])
+
+            if has_file_content and not _patch_result_has_body(result):
+                emit(
+                    fix_id, "warn",
+                    f"{label}: patch model still empty — retry 2/2",
+                    branch=f"fix-{group_id}",
+                )
+                result = structured.invoke([
+                    {
+                        "role": "system",
+                        "content": _PATCH_SYSTEM + _PATCH_RETRY_TAIL + _PATCH_RETRY_TAIL_2,
+                    },
                     {"role": "user", "content": user_msg},
                 ])
 
@@ -460,9 +554,24 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
                         patch.patched_snippet,
                     )
 
+            payload = result.model_dump()
+            payload["group_id"] = group_id
+            kept = [
+                p for p in payload.get("patches", [])
+                if isinstance(p, dict) and _patch_dict_is_substantive(p)
+            ]
+            payload["patches"] = kept
+            if has_file_content and not kept:
+                hint = (
+                    " No substantive patch produced after retries "
+                    "(model may have focused on doc-only findings)."
+                )
+                payload["notes"] = (payload.get("notes") or "").strip() + hint
+            result = PatchResult.model_validate(payload)
+
             emit(
                 fix_id, "branch_done",
-                f"{label}: {len(result.patches)} file(s) patched",
+                f"{label}: {len(result.patches)} substantive file patch(es)",
                 branch=f"fix-{group_id}",
             )
             all_results.append(result.model_dump())
@@ -497,8 +606,11 @@ Review the patches for:
   4. SYNTAX ERRORS: Obvious syntax problems in the patched code.
   5. INCOMPLETE FIXES: A patch that addresses the symptom but not the
      root cause.
+  6. EMPTY DIFFS: If a group claims a file but the diff has no + / - lines,
+     that is NOT safe to apply.
 
-Set approved=true if the patches are safe to apply as a batch.
+Set approved=true only if there is at least one real code change to apply
+and the batch is safe. If every diff is empty or cosmetic, approved=false.
 Set approved=false and explain in conflicts/warnings if not.
 """
 
@@ -527,6 +639,12 @@ async def review_patches_node(state: dict[str, Any]) -> dict[str, Any]:
     for pr in patch_results:
         group_id = pr.get("group_id", "?")
         patches = pr.get("patches", [])
+        if not patches:
+            review_sections.append(
+                f"### {group_id} → (no patch rows)\n"
+                f"Notes: {pr.get('notes', 'n/a')}"
+            )
+            continue
         for p in patches:
             diff = p.get("diff", "") or "(no diff)"
             review_sections.append(
@@ -564,12 +682,26 @@ async def review_patches_node(state: dict[str, Any]) -> dict[str, Any]:
             notes="Review LLM call failed — approving with warning.",
         )
 
-    status = "approved" if review.approved else "needs attention"
+    rd = review.model_dump()
+    if rd.get("approved") and not _batch_has_substantive_patches(patch_results):
+        rd["approved"] = False
+        w = list(rd.get("warnings") or [])
+        w.append(
+            "No substantive diff in any patch — nothing to apply. "
+            "Re-run fix mode or select fewer / file-backed findings only."
+        )
+        rd["warnings"] = w
+        rd["notes"] = (
+            (rd.get("notes") or "").strip()
+            + " Batch rejected: empty or non-code patches only."
+        ).strip()
+
+    status = "approved" if rd["approved"] else "needs attention"
     emit(
         fix_id, "branch_done",
-        f"Review complete: {status}, {len(review.conflicts)} conflict(s), "
-        f"{len(review.warnings)} warning(s)",
+        f"Review complete: {status}, {len(rd.get('conflicts', []))} conflict(s), "
+        f"{len(rd.get('warnings', []))} warning(s)",
         branch="fix-reviewer",
     )
 
-    return {"review_result": review.model_dump()}
+    return {"review_result": rd}

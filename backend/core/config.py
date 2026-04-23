@@ -90,6 +90,8 @@ FIX_PROMPT_FULL_FILE_MAX_CHARS: int = _env_int(
 )
 # Cap how many distinct files one fix group can load (planner + inferred paths).
 FIX_GROUP_MAX_FILES: int = _env_int("FIX_GROUP_MAX_FILES", 14)
+# Max findings per group after planning; the server coerces the LLM plan to honor this.
+FIX_PLAN_MAX_FINDINGS_PER_GROUP: int = _env_int("FIX_PLAN_MAX_FINDINGS_PER_GROUP", 5)
 # Patch LLM: only this group’s findings in report context (not full audit).
 FIX_PATCH_GROUP_CONTEXT_MAX_CHARS: int = _env_int(
     "FIX_PATCH_GROUP_CONTEXT_MAX_CHARS",

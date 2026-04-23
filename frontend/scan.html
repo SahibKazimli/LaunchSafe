@@ -1,7 +1,12 @@
-{% extends "base.html" %}
-{% block title %}Scanning… — LaunchSafe{% endblock %}
-
-{% block extra_styles %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Scanning… — LaunchSafe</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/common.css">
 <style>
   #screen-scan {
     min-height: calc(100vh - 65px);
@@ -72,7 +77,6 @@
   .branch-card.b-error   .b-dot { background: var(--orange); }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
-  /* branch labels inside the live event log */
   .event .branch {
     font-family: var(--mono); font-size: 9px; padding: 1px 6px;
     border: 1px solid var(--border2); border-radius: 3px;
@@ -93,7 +97,6 @@
   }
   .event.branch_start .kind, .event.branch_done .kind { color: var(--accent); }
 
-  /* Filter controls */
   .filter-bar {
     display: flex; gap: 6px; flex-wrap: wrap;
   }
@@ -145,9 +148,14 @@
   .event.warn { border-left-color: var(--orange); }
   .event.warn .kind { color: var(--orange); }
 </style>
-{% endblock %}
-
-{% block content %}
+</head>
+<body>
+<nav>
+  <a href="/" class="logo">LaunchSafe</a>
+  <div class="nav-right">
+    <span class="nav-badge">v0.1 · Python + FastAPI</span>
+  </div>
+</nav>
 <section id="screen-scan">
   <div class="scan-container fadein">
     <div class="scan-header">
@@ -188,201 +196,6 @@
     </div>
   </div>
 </section>
-{% endblock %}
-
-{% block scripts %}
-<script>
-  const SCAN_ID = "{{ scan_id }}";
-
-  const startedAt = Date.now();
-  let pollInterval = setInterval(poll, 1200);
-  let tickInterval = setInterval(tick, 1000);
-  let lastSeq = 0;
-  const seenBranchChips = new Set(['all']);
-  let activeBranchFilter = 'all';
-  const allEvents = [];
-
-  document.getElementById('filter-bar').addEventListener('click', (e) => {
-    const btn = e.target.closest('.filter-chip');
-    if (!btn) return;
-    activeBranchFilter = btn.dataset.branch;
-    for (const c of document.querySelectorAll('.filter-chip')) {
-      c.classList.toggle('active', c.dataset.branch === activeBranchFilter);
-    }
-    rerenderEvents();
-  });
-
-  function tick() {
-    const s = Math.round((Date.now() - startedAt) / 1000);
-    document.getElementById('elapsed').textContent = s + 's';
-  }
-
-  function renderRecon(profile) {
-    if (!profile) return;
-    const card = document.getElementById('recon-card');
-    if (card.style.display !== 'none') return;
-    card.style.display = 'block';
-    document.getElementById('recon-stack').textContent = profile.stack || '';
-    document.getElementById('recon-summary').textContent = profile.summary || '';
-    const tags = document.getElementById('recon-tags');
-    const flags = [
-      ['IaC', profile.has_iac], ['CI/CD', profile.has_cicd],
-      ['Auth', profile.has_auth], ['Payments', profile.has_payments],
-      ['User PII', profile.has_user_data],
-    ];
-    tags.innerHTML = flags.map(([l, on]) =>
-      `<span class="recon-tag ${on ? 'on' : ''}">${l}: ${on ? 'yes' : 'no'}</span>`
-    ).join('');
-  }
-
-  function ensureBranchChip(branch) {
-    if (!branch || seenBranchChips.has(branch)) return;
-    seenBranchChips.add(branch);
-    const bar = document.getElementById('filter-bar');
-    const btn = document.createElement('button');
-    btn.className = 'filter-chip';
-    btn.dataset.branch = branch;
-    btn.textContent = branch;
-    bar.appendChild(btn);
-  }
-
-  function eventMatchesFilter(ev) {
-    if (activeBranchFilter === 'all') return true;
-    return (ev.branch || 'outer') === activeBranchFilter;
-  }
-
-  function renderEventRow(ev) {
-    const row = document.createElement('div');
-    row.className = 'event ' + ev.kind;
-    const branch = ev.branch || 'outer';
-    row.innerHTML =
-      `<span class="t">${ev.t}s</span>` +
-      `<span class="branch b-${branch}">${branch}</span>` +
-      `<span class="kind">${ev.kind}</span>` +
-      `<span class="msg"></span>`;
-    row.querySelector('.msg').textContent = ev.text || '';
-    return row;
-  }
-
-  function rerenderEvents() {
-    const list = document.getElementById('events-list');
-    list.innerHTML = '';
-    for (const ev of allEvents) {
-      if (eventMatchesFilter(ev)) list.appendChild(renderEventRow(ev));
-    }
-    list.scrollTop = list.scrollHeight;
-  }
-
-  function renderEvents(events) {
-    if (!events || events.length === 0) return;
-    const list = document.getElementById('events-list');
-    const atBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 20;
-    for (const ev of events) {
-      if (ev.seq && ev.seq <= lastSeq) continue;
-      allEvents.push(ev);
-      ensureBranchChip(ev.branch);
-      if (eventMatchesFilter(ev)) list.appendChild(renderEventRow(ev));
-    }
-    if (atBottom) list.scrollTop = list.scrollHeight;
-  }
-
-  function renderBranches(branches) {
-    const keys = Object.keys(branches || {}).filter(k => k !== 'recon');
-    if (keys.length === 0) return;
-    document.getElementById('branches-panel').style.display = 'block';
-    const grid = document.getElementById('branches-grid');
-    grid.innerHTML = '';
-    let runningCount = 0, doneCount = 0;
-    const order = ['payments', 'iac', 'auth', 'cicd', 'general', 'synthesize'];
-    const sorted = [...keys].sort(
-      (a, b) => (order.indexOf(a) === -1 ? 99 : order.indexOf(a))
-              - (order.indexOf(b) === -1 ? 99 : order.indexOf(b))
-    );
-    for (const name of sorted) {
-      const b = branches[name];
-      if (b.status === 'running') runningCount++;
-      if (b.status === 'done') doneCount++;
-      const card = document.createElement('div');
-      card.className = `branch-card b-${b.status || 'pending'}`;
-      const tools = b.tool_calls || 0;
-      const findings = b.count || 0;
-      const meta =
-        b.status === 'done'
-          ? `${findings} finding${findings !== 1 ? 's' : ''} · ${tools} call${tools !== 1 ? 's' : ''}`
-          : b.status === 'running'
-            ? `${tools} call${tools !== 1 ? 's' : ''} so far`
-            : 'pending';
-      card.innerHTML =
-        `<span class="b-name"><span class="b-dot"></span>${name}</span>` +
-        `<span class="b-meta">${meta}</span>`;
-      grid.appendChild(card);
-    }
-    document.getElementById('branches-counter').textContent =
-      `${doneCount}/${keys.length} done` + (runningCount ? `, ${runningCount} running` : '');
-  }
-
-  async function poll() {
-    let data;
-    try {
-      const res = await fetch('/scan-status/' + SCAN_ID + '?since=' + lastSeq);
-      data = await res.json();
-    } catch (e) { return; }
-    if (typeof data.last_seq === 'number') {
-      // We render new events first (which advances lastSeq via the
-      // per-event check), then update to the server's high-water mark
-      // so we never re-fetch the same events.
-      renderEvents(data.events || []);
-      lastSeq = Math.max(lastSeq, data.last_seq);
-    }
-
-    if (data.error) {
-      const banner = document.getElementById('error-banner');
-      banner.style.display = 'block';
-      banner.textContent = 'Scan error: ' + data.error;
-      document.getElementById('working').style.display = 'none';
-      clearInterval(pollInterval);
-      clearInterval(tickInterval);
-      return;
-    }
-
-    renderRecon(data.repo_profile);
-    renderBranches(data.branches || {});
-
-    const working = document.getElementById('working-label');
-    if (data.status === 'running') {
-      const branches = data.branches || {};
-      const total = Object.keys(branches).length;
-      const running = Object.values(branches).filter(b => b.status === 'running').length;
-      const done = Object.values(branches).filter(b => b.status === 'done').length;
-      const totalCalls = Object.values(branches).reduce((a, b) => a + (b.tool_calls || 0), 0);
-      if (!data.repo_profile) {
-        working.textContent = 'Recon agent exploring the repo…';
-      } else if (total === 0) {
-        working.textContent = 'Routing to specialist branches…';
-      } else if (running > 0) {
-        working.textContent =
-          `${running} specialist${running !== 1 ? 's' : ''} running in parallel ` +
-          `· ${done}/${total} done · ${totalCalls} tool call${totalCalls !== 1 ? 's' : ''}`;
-      } else if (done > 0 && done < total) {
-        working.textContent = `Waiting on remaining branches… ${done}/${total} done`;
-      } else if (done === total && total > 0) {
-        working.textContent = 'Synthesizing final report…';
-      } else {
-        working.textContent = 'Working…';
-      }
-    }
-
-    if (data.status === 'done') {
-      clearInterval(pollInterval);
-      clearInterval(tickInterval);
-      document.getElementById('working').style.display = 'none';
-      document.getElementById('status-label').innerHTML =
-        'Complete — building report… <span class="elapsed">' +
-        Math.round((Date.now() - startedAt) / 1000) + 's</span>';
-      setTimeout(() => { window.location.href = '/report/' + SCAN_ID; }, 600);
-    }
-  }
-
-  poll();
-</script>
-{% endblock %}
+<script type="module" src="/src/scan.ts"></script>
+</body>
+</html>

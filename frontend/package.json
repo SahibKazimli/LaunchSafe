@@ -1,0 +1,13 @@
+{
+  "name": "launchsafe-frontend",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.7",
+    "vite": "^6"
+  }
+}

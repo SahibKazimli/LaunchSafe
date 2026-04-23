@@ -11,13 +11,13 @@ writes to FixSessionState.  Completely decoupled from the scan graph.
 
 from __future__ import annotations
 
-from .nodes import (
+from .fix_nodes import (
     generate_patches_node,
     load_context_node,
     plan_fixes_node,
     review_patches_node,
 )
-from .state import FixSessionState
+from .fix_state import FixSessionState
 
 
 _compiled = None

@@ -18,7 +18,7 @@ from agents.runtime_log import emit
 from core.config import SYNTH_MAX_TOKENS, SPEC_MAX_TOKENS
 from core import scan_store as _ss
 
-from .state import (
+from .fix_state import (
     FilePatch,
     FixGroup,
     FixPlan,
@@ -50,8 +50,10 @@ def load_context_node(state: dict[str, Any]) -> dict[str, Any]:
         }
 
     # Filter to selected finding indices
+    from core import fix_store as _fs
+    fix_session = _fs.get_fix_session(fix_id) or {}
+    selected_indices = fix_session.get("finding_indices", [])
     all_findings = scan.get("findings", [])
-    selected_indices = state.get("_finding_indices", [])
     if selected_indices:
         findings = [
             all_findings[i]
@@ -59,11 +61,8 @@ def load_context_node(state: dict[str, Any]) -> dict[str, Any]:
             if i < len(all_findings)
         ]
     else:
-        # Default: all critical + high findings
-        findings = [
-            finding for finding in all_findings
-            if finding.get("severity", "").lower() in ("critical", "high")
-        ]
+        # Default: all findings if none explicitly selected
+        findings = all_findings
 
     emit(
         fix_id, "info",
@@ -176,31 +175,46 @@ async def plan_fixes_node(state: dict[str, Any]) -> dict[str, Any]:
     return {"fix_plan": plan.model_dump()}
 
 
-# Node 3: Generate Patches
+# ── Node 3: Generate Patches ─────────────────────────────────────────
 
 
 _PATCH_SYSTEM = """\
 You are a senior security engineer applying fixes to production code.
-You receive a group of related security findings and the original file
-contents. Generate the MINIMAL code change that fixes ALL issues in
-this group.
+You receive a group of related security findings with original file contents.
 
 Rules:
+  - Make the MINIMAL change that fixes the issue in each file.
   - Preserve ALL existing functionality. Do NOT refactor unrelated code.
   - Preserve all comments and documentation unless they are the bug.
   - For each file you modify, provide:
-      1. The original code snippet (the relevant section, with 5-10
-         lines of surrounding context)
-      2. The patched code snippet (drop-in replacement)
-      3. A unified diff
-      4. One-sentence explanation of the change
-  - If a fix requires adding a new import, include it.
-  - If a fix requires adding a dependency, note it in your explanation
-    but do NOT modify package.json/requirements.txt unless it's in
-    your target files.
-  - Generate REAL code that compiles/runs. No pseudocode, no TODOs,
-    no "implement this here" placeholders.
+      1. original_snippet: the exact vulnerable section (5-10 lines context)
+      2. patched_snippet: drop-in replacement with the fix applied
+      3. diff: unified diff you generate from those two snippets
+      4. explanation: one sentence — what changed and why it fixes it
+  - Generate REAL code in the correct language. No pseudocode, no TODOs.
+  - Include new imports in the patched_snippet if needed.
+  - If no file content was provided for a finding, skip it and note why
+    in the PatchResult.notes field. Do NOT make up code.
 """
+
+def _find_file_content(path: str, files: dict[str, str]) -> tuple[str, str]:
+    """Find file content by path, handling zip root prefixes and varying slashes."""
+    if not path:
+        return "", ""
+    if path in files:
+        return path, files[path]
+        
+    path_suffix = "/" + path.lstrip("/")
+    for k, v in files.items():
+        if ("/" + k).endswith(path_suffix) or path_suffix.endswith("/" + k):
+            return k, v
+            
+    path_lower = path_suffix.lower()
+    for k, v in files.items():
+        if ("/" + k).lower().endswith(path_lower):
+            return k, v
+            
+    return path, ""
 
 
 def _make_diff(path: str, original: str, patched: str) -> str:
@@ -253,30 +267,57 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
             if idx < len(findings):
                 group_findings.append(findings[idx])
 
-        # Gather the relevant file contents
+        # Gather the relevant file contents using fuzzy path matching
         target_files = group.get("target_files", [])
+
+        # If target_files is empty, infer from finding locations
+        if not target_files:
+            seen = set()
+            for finding in group_findings:
+                loc = finding.get("location", "")
+                path_part = loc.split(":")[0].strip() if loc else ""
+                if path_part and path_part not in seen:
+                    target_files.append(path_part)
+                    seen.add(path_part)
+
         file_sections = []
+        missing_files = []
         for path in target_files:
-            content = files.get(path, "")
+            matched_path, content = _find_file_content(path, files)
             if content:
-                # Truncate very large files
                 snippet = content[:15_000]
                 if len(content) > 15_000:
                     snippet += "\n...[truncated]"
-                file_sections.append(f"### {path}\n```\n{snippet}\n```")
+                file_sections.append(f"### {matched_path}\n```\n{snippet}\n```")
+            else:
+                missing_files.append(path)
+
+        if missing_files:
+            emit(
+                fix_id, "warn",
+                f"{group_id}: could not find content for: {', '.join(missing_files[:5])}",
+                branch=f"fix-{group_id}",
+            )
+
+        has_file_content = bool(file_sections)
 
         # Build the prompt
         finding_text = "\n".join(
             f"- ({finding.get('severity', '?')}) {finding.get('title', '?')} "
             f"@ {finding.get('location', '?')}\n"
-            f"  Description: {(finding.get('description', '') or '')[:200]}\n"
-            f"  Suggested fix: {(finding.get('fix', '') or '')[:300]}"
+            f"  Description: {(finding.get('description', '') or '')[:300]}\n"
+            f"  Suggested fix: {(finding.get('fix', '') or '')[:400]}"
             for finding in group_findings
         )
-        files_text = "\n\n".join(file_sections) if file_sections else "(no file content available)"
+
+        if has_file_content:
+            files_text = "\n\n".join(file_sections)
+        else:
+            missing_list = ", ".join(target_files) if target_files else "unknown"
+            files_text = f"(File content not found for: {missing_list}. Skip this group and note in PatchResult.notes.)"
 
         user_msg = (
-            f"FIX GROUP: {label}\n"
+            f"FIX GROUP: {group.get('label', group_id)}\n"
             f"Commit message: {group.get('commit_message', '')}\n"
             f"Risk level: {group.get('risk_level', 'medium')}\n\n"
             f"FINDINGS TO FIX:\n{finding_text}\n\n"
@@ -295,8 +336,8 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
             for patch in result.patches:
                 if not patch.diff and patch.original_snippet and patch.patched_snippet:
                     patch.diff = _make_diff(
-                        patch.path,
-                        patch.original_snippet,
+                        patch.path, 
+                        patch.original_snippet, 
                         patch.patched_snippet,
                     )
 

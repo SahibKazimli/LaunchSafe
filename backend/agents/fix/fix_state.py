@@ -58,12 +58,15 @@ class FixGroup(BaseModel):
         )
     )
     label: str = Field(
+        default="",
         description="Human-readable label, e.g. 'Authentication Hardening'",
     )
     finding_indices: list[int] = Field(
+        default_factory=list,
         description="Indices into the findings list that belong to this group",
     )
     target_files: list[str] = Field(
+        default_factory=list,
         description="File paths that need to be modified for this group",
     )
     risk_level: str = Field(
@@ -74,6 +77,7 @@ class FixGroup(BaseModel):
         ),
     )
     commit_message: str = Field(
+        default="",
         description=(
             "Conventional commit message for this group, e.g. "
             "'fix(auth): enforce HS256 algorithm in JWT verification'"
@@ -117,6 +121,7 @@ class PatchReview(BaseModel):
     """Output of the review node."""
 
     approved: bool = Field(
+        default=True,
         description="True if patches are conflict-free and safe to apply.",
     )
     conflicts: list[str] = Field(

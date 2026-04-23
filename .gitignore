@@ -14,6 +14,7 @@ __pycache__/
 *.pyzwzw
 
 frontend/node_modules/
+frontend/package-lock.json
 frontend/dist/
 frontend/build/
 frontend/coverage/
@@ -23,3 +24,4 @@ frontend/screenshots/
 frontend/screenshots/
 backend/static/js/
 .DS_Store
+

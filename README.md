@@ -74,6 +74,17 @@ uvicorn main:app --reload
 # → http://127.0.0.1:8000
 ```
 
+### Frontend (Vite)
+
+Scan / report / fix pages load TypeScript from `/src/*.ts`. In development, run the Vite dev server and use **port 5173** (not raw `8000` for those pages—FastAPI does not serve `/src/*.ts`).
+
+```bash
+cd frontend && npm install && npm run dev
+# → http://127.0.0.1:5173
+```
+
+Keep **uvicorn on 8000** in another terminal: HTML and `fetch()` use relative URLs, and Vite proxies `/start-scan`, `/scan-status`, `/api`, `/start-fix`, `/fix-status`, `/fix-patches`, and `/debug` to the backend.
+
 ## Repo layout
 
 ```

@@ -90,6 +90,18 @@ FIX_PROMPT_FULL_FILE_MAX_CHARS: int = _env_int(
 )
 # Cap how many distinct files one fix group can load (planner + inferred paths).
 FIX_GROUP_MAX_FILES: int = _env_int("FIX_GROUP_MAX_FILES", 14)
+# Patch LLM: only this group’s findings in report context (not full audit).
+FIX_PATCH_GROUP_CONTEXT_MAX_CHARS: int = _env_int(
+    "FIX_PATCH_GROUP_CONTEXT_MAX_CHARS",
+    8_000,
+)
+# Patch LLM: above this size, use line-window excerpt not whole file (saves input tokens).
+FIX_PATCH_FILE_PROMPT_MAX_CHARS: int = _env_int(
+    "FIX_PATCH_FILE_PROMPT_MAX_CHARS",
+    32_000,
+)
+# Lines before/after cited finding line(s) in patch prompts (tight window vs whole file).
+FIX_PATCH_LINE_MARGIN: int = _env_int("FIX_PATCH_LINE_MARGIN", 16)
 
 # Fewer files per ``select_hotspots`` → fewer follow-up reads / AI scans
 SELECT_HOTSPOT_MAX_FILES: int = _env_int("SELECT_HOTSPOT_MAX_FILES", 6)

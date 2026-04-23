@@ -191,12 +191,17 @@ def build_excerpt_for_fix_prompt(
     full_file_max_chars: int = 200_000,
     head_limit: int = 14_000,
     line_margin: int = 30,
+    narrow_to_cited_region: bool = False,
 ) -> str:
     """Build prompt text for the patch model.
 
     Prefer the **complete ingested file** when it fits ``full_file_max_chars``
     (same bytes we already store in scan/fix context). Otherwise use a line
     window around cited locations, then a head truncation.
+
+    If ``narrow_to_cited_region`` is True and at least one finding cites a line
+    in this file, always use the line window (never the whole file) so the
+    model focuses on the vulnerable region.
     """
     lines = content.splitlines(keepends=True)
     n = len(lines)
@@ -210,6 +215,16 @@ def build_excerpt_for_fix_prompt(
         ln = parse_line_number_from_location(gf.get("location", ""))
         if ln is not None and ln >= 1:
             line_nums.append(ln)
+
+    if narrow_to_cited_region and line_nums and n > 0:
+        lo = max(1, min(line_nums) - line_margin)
+        hi = min(n, max(line_nums) + line_margin)
+        excerpt = "".join(lines[lo - 1 : hi])
+        return (
+            f"### {matched_path} (lines {lo}-{hi} of {n}; excerpt around cited finding — "
+            "copy `original_snippet` only from this block)\n"
+            f"```\n{excerpt}\n```"
+        )
 
     if len(content) <= full_file_max_chars:
         return (

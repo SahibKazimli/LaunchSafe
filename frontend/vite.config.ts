@@ -1,18 +1,25 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
 
+/** Dev API: run `uvicorn main:app --reload` from `backend/` on port 8000. */
+const API_ORIGIN = 'http://localhost:8000';
+
+function proxyToApi() {
+  return { target: API_ORIGIN, changeOrigin: true };
+}
+
 export default defineConfig({
   root: '.',
   server: {
     port: 5173,
     proxy: {
-      '/start-scan': 'http://localhost:8000',
-      '/scan-status': 'http://localhost:8000',
-      '/api': 'http://localhost:8000',
-      '/start-fix': 'http://localhost:8000',
-      '/fix-status': 'http://localhost:8000',
-      '/fix-patches': 'http://localhost:8000',
-      '/debug': 'http://localhost:8000',
+      '/start-scan': proxyToApi(),
+      '/scan-status': proxyToApi(),
+      '/api': proxyToApi(),
+      '/start-fix': proxyToApi(),
+      '/fix-status': proxyToApi(),
+      '/fix-patches': proxyToApi(),
+      '/debug': proxyToApi(),
     },
   },
   plugins: [{

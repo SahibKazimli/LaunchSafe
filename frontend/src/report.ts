@@ -168,13 +168,69 @@ const SEV_TITLES: Record<string, string> = {
   low:      'lower-risk issue, defense-in-depth, or limited practical exposure',
 };
 
-function renderComplianceTag(tag: string | { id?: string; summary?: string; url?: string }): string {
-  if (typeof tag === 'string') {
-    return `<span class="comp-tag">${escapeHtml(tag)}</span>`;
+/** When the API omits `url` (or legacy string tags), map known ids to deep links. Mirrors backend `compliance_enrichment`. */
+const OWASP_2021_PATHS: readonly string[] = [
+  'A01_2021-Broken_Access_Control',
+  'A02_2021-Cryptographic_Failures',
+  'A03_2021-Injection',
+  'A04_2021-Insecure_Design',
+  'A05_2021-Security_Misconfiguration',
+  'A06_2021-Vulnerable_and_Outdated_Components',
+  'A07_2021-Identification_and_Authentication_Failures',
+  'A08_2021-Software_and_Data_Integrity_Failures',
+  'A09_2021-Security_Logging_and_Monitoring_Failures',
+  'A10_2021-Server-Side_Request_Forgery_%28SSRF%29',
+];
+
+function guessComplianceUrl(rawId: string): string {
+  const raw = rawId.trim();
+  if (!raw) return '';
+  const ow = raw.match(/OWASP-?\s*A(0[1-9]|10)\b/i) || raw.match(/OWASP\s*A(0[1-9]|10)\s*:\s*2021/i);
+  if (ow) {
+    const n = parseInt(ow[1], 10);
+    if (n >= 1 && n <= 10) {
+      return `https://owasp.org/Top10/${OWASP_2021_PATHS[n - 1]}/`;
+    }
   }
-  const tid = escapeHtml(tag.id || '');
-  const tsum = tag.summary ? escapeHtml(tag.summary) : '';
-  const turl = tag.url || '';
+  if (/gdpr/i.test(raw)) {
+    const art = raw.match(/Art\.?\s*(\d+)/i);
+    if (art && ['5', '13', '25', '32', '33'].includes(art[1])) {
+      return `https://gdpr-info.eu/art-${art[1]}-gdpr/`;
+    }
+  }
+  if (/ccpa/i.test(raw) && (raw.includes('1798.100') || raw.includes('1798-100'))) {
+    return 'https://leginfo.legislature.ca.gov/faces/codes_displaySection.xhtml?lawCode=CIV&sectionNum=1798.100';
+  }
+  if (/ccpa/i.test(raw) && (raw.includes('1798.150') || raw.includes('1798-150'))) {
+    return 'https://leginfo.legislature.ca.gov/faces/codes_displaySection.xhtml?lawCode=CIV&sectionNum=1798.150';
+  }
+  if (/soc\s*2|soc2|trust services/i.test(raw) && /cc\s*[67]\.\d/i.test(raw)) {
+    return 'https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022';
+  }
+  const nist = raw.match(/800-53[:\s]+([A-Z]{1,3})-?\s*(\d+)/i);
+  if (nist) {
+    const ctrl = `${nist[1].toUpperCase()}-${nist[2]}`;
+    return `https://csrc.nist.gov/projects/risk-management/sp800-53-controls/release-search#!/control?version=5.1&number=${ctrl}`;
+  }
+  if (/27001/i.test(raw) && /A\.(9|12)\b/i.test(raw)) {
+    return 'https://www.iso.org/standard/54534.html';
+  }
+  return '';
+}
+
+function renderComplianceTag(tag: string | { id?: string; summary?: string; url?: string }): string {
+  let idStr: string;
+  let tsum = '';
+  if (typeof tag === 'string') {
+    idStr = tag;
+  } else {
+    idStr = tag.id || '';
+    tsum = tag.summary ? escapeHtml(tag.summary) : '';
+  }
+  const tid = escapeHtml(idStr);
+  const turl = (typeof tag === 'object' && tag && typeof tag.url === 'string' && tag.url.trim())
+    ? tag.url.trim()
+    : guessComplianceUrl(idStr);
   if (turl) {
     return `<a class="comp-tag linked" href="${escapeHtml(turl)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">${tid}<span class="comp-pop"><span class="pop-title">${tid}</span>${tsum ? `<span class="pop-summary">${tsum}</span>` : ''}<span class="pop-link">Open standard</span></span></a>`;
   } else if (tsum) {

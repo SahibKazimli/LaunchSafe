@@ -158,6 +158,51 @@ def _patch_dict_is_substantive(patch: dict) -> bool:
     return False
 
 
+def _naive_brace_depth(text: str) -> int:
+    d = 0
+    for c in text:
+        if c == "{":
+            d += 1
+        elif c == "}":
+            d -= 1
+    return d
+
+
+def _naive_paren_depth(text: str) -> int:
+    d = 0
+    for c in text:
+        if c == "(":
+            d += 1
+        elif c == ")":
+            d -= 1
+    return d
+
+
+def _last_non_empty_line(text: str) -> str:
+    for line in reversed(text.splitlines()):
+        if line.strip():
+            return line.rstrip()
+    return ""
+
+
+def _patch_looks_incomplete_or_truncated(patch: dict) -> bool:
+    """Heuristic: model hit output limits or dropped closing braces (reject, retry)."""
+    s = (patch.get("patched_snippet") or "").strip()
+    if not s:
+        return True
+    if _naive_brace_depth(s) != 0:
+        return True
+    if _naive_paren_depth(s) != 0:
+        return True
+    last = _last_non_empty_line(s)
+    if last.endswith("\\"):
+        return True
+    # Unterminated string on the last line (common when printf/concat is cut off)
+    if last.count('"') % 2 == 1 or last.count("'") % 2 == 1:
+        return True
+    return False
+
+
 def _patch_result_has_body(result: PatchResult) -> bool:
     for p in result.patches:
         if _patch_dict_is_substantive(p.model_dump()):
@@ -453,6 +498,10 @@ Rules:
   - **Sanity check:** `patched_snippet` must not have far fewer lines than
     `original_snippet` unless you are deliberately deleting dead code called out
     in the finding. Typical bind/config fixes change 1–2 lines only; keep the rest.
+  - **Completeness:** Every `patched_snippet` must be syntactically complete in
+    isolation: balanced `()` and `{}`, closed string literals, and terminated
+    statements (`;` where the language requires). Do not stop mid-`printf` or
+    mid-`if`.
 """
 
 _PATCH_RETRY_TAIL = (
@@ -470,6 +519,14 @@ _PATCH_RETRY_TAIL_2 = (
     "\n\nFinal attempt: Emit ONE FilePatch per file under ORIGINAL FILES. "
     "Each patch must have original_snippet ≠ patched_snippet (real edit). "
     "Ignore doc-only / policy findings in the list footer — they are not files."
+)
+
+_PATCH_RETRY_TRUNCATION = (
+    "\n\nYour last output was rejected as **truncated or structurally incomplete**: "
+    "unbalanced `()` / `{}`, or an **unterminated string** on the last line. "
+    "Reply with **complete** `patched_snippet` only — full `printf(\"...\");` lines, "
+    "full `if (...) { ... }` including any `break;` / `return` the original had. "
+    "Prefer the smallest edit (e.g. add `|| cmd_length > N` to an existing `if`)."
 )
 
 
@@ -611,55 +668,77 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
         try:
             llm = get_llm(max_tokens=FIX_PATCH_MAX_TOKENS)
             structured = llm.with_structured_output(PatchResult)
-            result: PatchResult = structured.invoke([
-                {"role": "system", "content": _PATCH_SYSTEM},
-                {"role": "user", "content": user_msg},
-            ])
-
-            if has_file_content and not _patch_result_has_body(result):
-                emit(
-                    fix_id, "warn",
-                    f"{label}: patch model returned empty bodies — one retry",
-                    branch=f"fix-{group_id}",
-                )
-                result = structured.invoke([
-                    {"role": "system", "content": _PATCH_SYSTEM + _PATCH_RETRY_TAIL},
-                    {"role": "user", "content": user_msg},
-                ])
-
-            if has_file_content and not _patch_result_has_body(result):
-                emit(
-                    fix_id, "warn",
-                    f"{label}: patch model still empty — retry 2/2",
-                    branch=f"fix-{group_id}",
-                )
-                result = structured.invoke([
-                    {
-                        "role": "system",
-                        "content": _PATCH_SYSTEM + _PATCH_RETRY_TAIL + _PATCH_RETRY_TAIL_2,
-                    },
-                    {"role": "user", "content": user_msg},
-                ])
-
-            # Backfill diffs if the LLM didn't generate them
             fallback_path = target_keys[0] if target_keys else "file"
-            for patch in result.patches:
-                if not patch.diff and patch.original_snippet and patch.patched_snippet:
-                    use_path = (patch.path or "").strip() or fallback_path
-                    patch.diff = _make_diff(
-                        use_path,
-                        patch.original_snippet,
-                        patch.patched_snippet,
-                    )
 
+            def _backfill_patch_diffs(res: PatchResult) -> None:
+                for patch in res.patches:
+                    if not patch.diff and patch.original_snippet and patch.patched_snippet:
+                        use_path = (patch.path or "").strip() or fallback_path
+                        patch.diff = _make_diff(
+                            use_path,
+                            patch.original_snippet,
+                            patch.patched_snippet,
+                        )
+
+            def _kept_patches_from_result(res: PatchResult) -> tuple[list[dict], list[dict]]:
+                """Return (substantive patches, kept patches that pass structural checks)."""
+                substantive: list[dict] = []
+                kept: list[dict] = []
+                for p in res.patches:
+                    d = p.model_dump()
+                    if not isinstance(d, dict) or not _patch_dict_is_substantive(d):
+                        continue
+                    substantive.append(d)
+                    if not _patch_looks_incomplete_or_truncated(d):
+                        kept.append(d)
+                return substantive, kept
+
+            extra_sys = ""
+            result: PatchResult | None = None
+            for attempt in range(3):
+                sys_content = _PATCH_SYSTEM + extra_sys
+                if attempt == 2:
+                    sys_content += _PATCH_RETRY_TAIL_2
+                result = structured.invoke([
+                    {"role": "system", "content": sys_content},
+                    {"role": "user", "content": user_msg},
+                ])
+                _backfill_patch_diffs(result)
+                if not has_file_content:
+                    break
+                substantive, kept = _kept_patches_from_result(result)
+                if kept:
+                    break
+                if attempt < 2:
+                    if substantive:
+                        emit(
+                            fix_id, "warn",
+                            f"{label}: patch snippets incomplete or truncated — retry {attempt + 1}/2",
+                            branch=f"fix-{group_id}",
+                        )
+                        extra_sys += _PATCH_RETRY_TRUNCATION
+                    else:
+                        emit(
+                            fix_id, "warn",
+                            f"{label}: patch model returned no substantive edits — retry {attempt + 1}/2",
+                            branch=f"fix-{group_id}",
+                        )
+                        extra_sys += _PATCH_RETRY_TAIL
+
+            _backfill_patch_diffs(result)
             payload = result.model_dump()
             payload["group_id"] = group_id
-            kept = [
-                p for p in payload.get("patches", [])
-                if isinstance(p, dict) and _patch_dict_is_substantive(p)
-            ]
+            substantive, kept = _kept_patches_from_result(
+                PatchResult.model_validate({**payload, "group_id": group_id}),
+            )
             payload["patches"] = kept
-            if has_file_content and not kept:
+            if has_file_content and substantive and not kept:
+                payload["notes"] = (
+                    (payload.get("notes") or "").strip()
+                    + " Patches were discarded: truncated or structurally incomplete "
+                    "(unbalanced braces/parens or unterminated string)."
+                ).strip()
+            elif has_file_content and not kept:
                 hint = (
                     " No substantive patch produced after retries "
                     "(model may have focused on doc-only findings)."
@@ -734,21 +813,21 @@ async def review_patches_node(state: dict[str, Any]) -> dict[str, Any]:
 
     # Build review input
     review_sections = []
-    for pr in patch_results:
-        group_id = pr.get("group_id", "?")
-        patches = pr.get("patches", [])
+    for patch_result in patch_results:
+        group_id = patch_result.get("group_id", "?")
+        patches = patch_result.get("patches", [])
         if not patches:
             review_sections.append(
                 f"### {group_id} → (no patch rows)\n"
-                f"Notes: {pr.get('notes', 'n/a')}"
+                f"Notes: {patch_result.get('notes', 'n/a')}"
             )
             continue
-        for p in patches:
-            diff = p.get("diff", "") or "(no diff)"
+        for patch in patches:
+            diff = patch.get("diff", "") or "(no diff)"
             review_sections.append(
-                f"### {group_id} → {p.get('path', '?')}\n"
+                f"### {group_id} → {patch.get('path', '?')}\n"
                 f"```diff\n{diff[:3000]}\n```\n"
-                f"Explanation: {p.get('explanation', 'n/a')}"
+                f"Explanation: {patch.get('explanation', 'n/a')}"
             )
 
     if not review_sections:

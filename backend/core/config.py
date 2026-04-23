@@ -56,31 +56,42 @@ def spec_react_recursion_limit() -> int:
 
 
 # LLM / agent knobs
+#
+# Cost control (all overridable via LAUNCHSAFE_<NAME> in the environment):
+#   - SPEC_MAX_TOOL_CALLS — strongest savings (fewer Gemini round-trips per
+#     specialist branch). Prompts and scan_budget_guard read this value.
+#   - *_MAX_TOKENS — caps on model output per call (input still depends on
+#     tools; tighten truncation below to reduce prompt size).
+#   - LLM_MODEL — use e.g. gemini-3-flash-preview for cheaper/faster calls
+#     (see agents/llm.py).
 
+# Default to Flash for lower cost; override with LAUNCHSAFE_LLM_MODEL for Pro.
+LLM_MODEL: str             = _env_str("LLM_MODEL", "gemini-3-flash-preview")
 
-LLM_MODEL: str             = _env_str("LLM_MODEL", "gemini-3.1-pro-preview")
-
-SPEC_RECURSION_LIMIT: int   = _env_int("SPEC_RECURSION_LIMIT", 30)
-SPEC_MAX_TOKENS: int        = _env_int("SPEC_MAX_TOKENS", 4096)
+SPEC_RECURSION_LIMIT: int   = _env_int("SPEC_RECURSION_LIMIT", 24)
+SPEC_MAX_TOKENS: int        = _env_int("SPEC_MAX_TOKENS", 3072)
 # Primary credit knob: agents are instructed to use at most this many tool
 # invocations; see spec_react_recursion_limit() for LangGraph *step* count.
-SPEC_MAX_TOOL_CALLS: int    = _env_int("SPEC_MAX_TOOL_CALLS", 20)
+SPEC_MAX_TOOL_CALLS: int    = _env_int("SPEC_MAX_TOOL_CALLS", 14)
 
-RECON_MAX_TOKENS: int       = _env_int("RECON_MAX_TOKENS", 2048)
-SYNTH_MAX_TOKENS: int       = _env_int("SYNTH_MAX_TOKENS", 2048)
-AI_SCAN_MAX_TOKENS: int     = _env_int("AI_SCAN_MAX_TOKENS", 2048)
+RECON_MAX_TOKENS: int       = _env_int("RECON_MAX_TOKENS", 1536)
+SYNTH_MAX_TOKENS: int       = _env_int("SYNTH_MAX_TOKENS", 1536)
+AI_SCAN_MAX_TOKENS: int     = _env_int("AI_SCAN_MAX_TOKENS", 1536)
 
 
 
 # Truncation 
 
-MAX_FILE_BYTES: int          = _env_int("MAX_FILE_BYTES", 20_000)
+MAX_FILE_BYTES: int          = _env_int("MAX_FILE_BYTES", 16_000)
 MAX_CICD_BUNDLE_BYTES: int   = _env_int("MAX_CICD_BUNDLE_BYTES", 40_000)
 MAX_AUTH_BUNDLE_BYTES: int   = _env_int("MAX_AUTH_BUNDLE_BYTES", 40_000)
 MAX_INGEST_FILE_BYTES: int   = _env_int("MAX_INGEST_FILE_BYTES", 200_000)
 
-MAX_BATCH_BYTES: int         = _env_int("MAX_BATCH_BYTES", 120_000)
-MAX_FILES_PER_BATCH: int     = _env_int("MAX_FILES_PER_BATCH", 10)
+# Per-file cap inside read_files() batch tool (keeps tool responses smaller).
+MAX_TOOL_READ_PER_FILE: int  = _env_int("MAX_TOOL_READ_PER_FILE", 10_000)
+
+MAX_BATCH_BYTES: int         = _env_int("MAX_BATCH_BYTES", 96_000)
+MAX_FILES_PER_BATCH: int     = _env_int("MAX_FILES_PER_BATCH", 8)
 
 MAX_FINDINGS_PER_TOOL: int   = _env_int("MAX_FINDINGS_PER_TOOL", 40)
 MAX_FINDINGS_PER_BRANCH: int = _env_int("MAX_FINDINGS_PER_BRANCH", 10)

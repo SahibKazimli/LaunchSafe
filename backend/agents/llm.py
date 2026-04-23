@@ -13,8 +13,8 @@ Provider selection
 
 Example overrides::
 
-    LAUNCHSAFE_LLM_MODEL=claude-haiku-4-5-20251001   # cheaper / faster
-    LAUNCHSAFE_LLM_MODEL=gemini-2.0-flash             # Gemini instead of Claude
+    LAUNCHSAFE_LLM_MODEL=claude-3-5-sonnet-20241022   # stronger than default Haiku
+    LAUNCHSAFE_LLM_MODEL=gemini-2.0-flash            # use Gemini instead
 """
 
 from __future__ import annotations

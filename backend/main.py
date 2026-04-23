@@ -42,7 +42,7 @@ _anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
 try:
     from core.config import LLM_MODEL
 except Exception:  # noqa: BLE001
-    LLM_MODEL = os.environ.get("LAUNCHSAFE_LLM_MODEL", "claude-sonnet-4-5-20250929")
+    LLM_MODEL = os.environ.get("LAUNCHSAFE_LLM_MODEL", "claude-sonnet-4-6")
 
 _m = (LLM_MODEL or "").lower()
 if _m.startswith("gemini"):

@@ -31,18 +31,18 @@ def get_fix_agent():
 
     from langgraph.graph import END, START, StateGraph
 
-    g = StateGraph(FixSessionState)
+    graph = StateGraph(FixSessionState)
 
-    g.add_node("load_context", load_context_node)
-    g.add_node("plan_fixes", plan_fixes_node)
-    g.add_node("generate_patches", generate_patches_node)
-    g.add_node("review_patches", review_patches_node)
+    graph.add_node("load_context", load_context_node)
+    graph.add_node("plan_fixes", plan_fixes_node)
+    graph.add_node("generate_patches", generate_patches_node)
+    graph.add_node("review_patches", review_patches_node)
 
-    g.add_edge(START, "load_context")
-    g.add_edge("load_context", "plan_fixes")
-    g.add_edge("plan_fixes", "generate_patches")
-    g.add_edge("generate_patches", "review_patches")
-    g.add_edge("review_patches", END)
+    graph.add_edge(START, "load_context")
+    graph.add_edge("load_context", "plan_fixes")
+    graph.add_edge("plan_fixes", "generate_patches")
+    graph.add_edge("generate_patches", "review_patches")
+    graph.add_edge("review_patches", END)
 
-    _compiled = g.compile()
+    _compiled = graph.compile()
     return _compiled

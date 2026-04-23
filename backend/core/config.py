@@ -8,8 +8,8 @@ of defining their own defaults.
 (``LAUNCHSAFE_<KEY>``). The largest savings are usually
 ``LAUNCHSAFE_SPEC_MAX_TOOL_CALLS`` (fewer tool round-trips per
 specialist) and output token caps on recon / synth / ai_scan / fix. For
-higher quality on large patches, raise ``LAUNCHSAFE_FIX_PATCH_MAX_TOKENS``
-or switch ``LAUNCHSAFE_LLM_MODEL`` (default is Sonnet 4.5).
+higher quality on large patches, set ``LAUNCHSAFE_LLM_MODEL`` to a
+larger model and optionally raise ``LAUNCHSAFE_FIX_PATCH_MAX_TOKENS``.
 """
 
 from __future__ import annotations
@@ -66,24 +66,24 @@ def spec_react_recursion_limit() -> int:
 # LLM / agent knobs
 
 
-# Default: Claude Sonnet 4.5. Override with LAUNCHSAFE_LLM_MODEL.
-LLM_MODEL: str             = _env_str("LLM_MODEL", "claude-sonnet-4-5-20250929")
+# Default: cheap Claude. Use e.g. claude-3-5-sonnet-20241022 for heavier scans.
+LLM_MODEL: str             = _env_str("LLM_MODEL", "claude-3-5-haiku-20241022")
 
-SPEC_RECURSION_LIMIT: int   = _env_int("SPEC_RECURSION_LIMIT", 12)
-SPEC_MAX_TOKENS: int        = _env_int("SPEC_MAX_TOKENS", 768)
+SPEC_RECURSION_LIMIT: int   = _env_int("SPEC_RECURSION_LIMIT", 24)
+SPEC_MAX_TOKENS: int        = _env_int("SPEC_MAX_TOKENS", 1024)
 # Primary credit knob: agents are instructed to use at most this many tool
 # invocations; see spec_react_recursion_limit() for LangGraph *step* count.
-SPEC_MAX_TOOL_CALLS: int    = _env_int("SPEC_MAX_TOOL_CALLS", 5)
+SPEC_MAX_TOOL_CALLS: int    = _env_int("SPEC_MAX_TOOL_CALLS", 7)
 
-RECON_MAX_TOKENS: int       = _env_int("RECON_MAX_TOKENS", 768)
-SYNTH_MAX_TOKENS: int       = _env_int("SYNTH_MAX_TOKENS", 384)
-AI_SCAN_MAX_TOKENS: int     = _env_int("AI_SCAN_MAX_TOKENS", 768)
+RECON_MAX_TOKENS: int       = _env_int("RECON_MAX_TOKENS", 1024)
+SYNTH_MAX_TOKENS: int       = _env_int("SYNTH_MAX_TOKENS", 512)
+AI_SCAN_MAX_TOKENS: int     = _env_int("AI_SCAN_MAX_TOKENS", 1024)
 
 # Phase-2 fix graph (separate caps so patch generation can stay higher than plan/review)
-FIX_PLAN_MAX_TOKENS: int    = _env_int("FIX_PLAN_MAX_TOKENS", 512)
+FIX_PLAN_MAX_TOKENS: int    = _env_int("FIX_PLAN_MAX_TOKENS", 768)
 # Large patches may need a higher cap via env (trade-off vs. credits).
-FIX_PATCH_MAX_TOKENS: int   = _env_int("FIX_PATCH_MAX_TOKENS", 3072)
-FIX_REVIEW_MAX_TOKENS: int  = _env_int("FIX_REVIEW_MAX_TOKENS", 384)
+FIX_PATCH_MAX_TOKENS: int   = _env_int("FIX_PATCH_MAX_TOKENS", 4096)
+FIX_REVIEW_MAX_TOKENS: int  = _env_int("FIX_REVIEW_MAX_TOKENS", 512)
 # When an ingested file is at most this many characters, the fix prompt includes
 # the **entire** file (not an excerpt). Matches typical ingest cap.
 FIX_PROMPT_FULL_FILE_MAX_CHARS: int = _env_int(
@@ -91,41 +91,41 @@ FIX_PROMPT_FULL_FILE_MAX_CHARS: int = _env_int(
     200_000,
 )
 # Cap how many distinct files one fix group can load (planner + inferred paths).
-FIX_GROUP_MAX_FILES: int = _env_int("FIX_GROUP_MAX_FILES", 10)
+FIX_GROUP_MAX_FILES: int = _env_int("FIX_GROUP_MAX_FILES", 14)
 # Max findings per group after planning; the server coerces the LLM plan to honor this.
 FIX_PLAN_MAX_FINDINGS_PER_GROUP: int = _env_int("FIX_PLAN_MAX_FINDINGS_PER_GROUP", 5)
 # Patch LLM: only this group’s findings in report context (not full audit).
 FIX_PATCH_GROUP_CONTEXT_MAX_CHARS: int = _env_int(
     "FIX_PATCH_GROUP_CONTEXT_MAX_CHARS",
-    6_000,
+    8_000,
 )
 # Patch LLM: above this size, use line-window excerpt not whole file (saves input tokens).
 FIX_PATCH_FILE_PROMPT_MAX_CHARS: int = _env_int(
     "FIX_PATCH_FILE_PROMPT_MAX_CHARS",
-    24_000,
+    32_000,
 )
 # Lines before/after cited finding line(s) in patch prompts (tight window vs whole file).
-FIX_PATCH_LINE_MARGIN: int = _env_int("FIX_PATCH_LINE_MARGIN", 12)
+FIX_PATCH_LINE_MARGIN: int = _env_int("FIX_PATCH_LINE_MARGIN", 16)
 # How many fix groups may run LLM locate+edit concurrently (semaphore). 1 = sequential.
-FIX_MAX_CONCURRENT_PATCH_GROUPS: int = _env_int("FIX_MAX_CONCURRENT_PATCH_GROUPS", 2)
+FIX_MAX_CONCURRENT_PATCH_GROUPS: int = _env_int("FIX_MAX_CONCURRENT_PATCH_GROUPS", 3)
 
 # Fewer files per ``select_hotspots`` → fewer follow-up reads / AI scans
-SELECT_HOTSPOT_MAX_FILES: int = _env_int("SELECT_HOTSPOT_MAX_FILES", 4)
+SELECT_HOTSPOT_MAX_FILES: int = _env_int("SELECT_HOTSPOT_MAX_FILES", 6)
 
 
 
 # Truncation 
 
-MAX_FILE_BYTES: int          = _env_int("MAX_FILE_BYTES", 12_000)
-MAX_CICD_BUNDLE_BYTES: int   = _env_int("MAX_CICD_BUNDLE_BYTES", 32_000)
-MAX_AUTH_BUNDLE_BYTES: int   = _env_int("MAX_AUTH_BUNDLE_BYTES", 32_000)
+MAX_FILE_BYTES: int          = _env_int("MAX_FILE_BYTES", 16_000)
+MAX_CICD_BUNDLE_BYTES: int   = _env_int("MAX_CICD_BUNDLE_BYTES", 40_000)
+MAX_AUTH_BUNDLE_BYTES: int   = _env_int("MAX_AUTH_BUNDLE_BYTES", 40_000)
 MAX_INGEST_FILE_BYTES: int   = _env_int("MAX_INGEST_FILE_BYTES", 200_000)
 
-MAX_BATCH_BYTES: int         = _env_int("MAX_BATCH_BYTES", 72_000)
-MAX_FILES_PER_BATCH: int     = _env_int("MAX_FILES_PER_BATCH", 6)
+MAX_BATCH_BYTES: int         = _env_int("MAX_BATCH_BYTES", 96_000)
+MAX_FILES_PER_BATCH: int     = _env_int("MAX_FILES_PER_BATCH", 8)
 
-MAX_FINDINGS_PER_TOOL: int   = _env_int("MAX_FINDINGS_PER_TOOL", 30)
-MAX_FINDINGS_PER_BRANCH: int = _env_int("MAX_FINDINGS_PER_BRANCH", 8)
+MAX_FINDINGS_PER_TOOL: int   = _env_int("MAX_FINDINGS_PER_TOOL", 40)
+MAX_FINDINGS_PER_BRANCH: int = _env_int("MAX_FINDINGS_PER_BRANCH", 10)
 
 
 

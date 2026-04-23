@@ -165,6 +165,17 @@
     .report-layout { grid-template-columns: 1fr; }
     #screen-report { padding: 20px; }
   }
+
+  .btn-fix {
+    background: linear-gradient(135deg, #06d6a0, #4cc9f0);
+    color: #0b0c0e; font-family: var(--sans); font-weight: 600;
+    font-size: 13px; padding: 10px 20px; border: none;
+    border-radius: 10px; cursor: pointer; text-decoration: none;
+    transition: opacity .15s, transform .1s;
+  }
+  .btn-fix:hover { opacity: 0.85; }
+  .btn-fix:active { transform: scale(0.98); }
+  .btn-fix:disabled { opacity: 0.5; cursor: wait; }
 </style>
 {% endblock %}
 
@@ -295,7 +306,10 @@
           <h2>Security report</h2>
           <p>Target: {{ scan.target }} · <span class="findings-count">{{ total }} findings</span></p>
         </div>
-        <a href="/api/findings/{{ scan.get('id', '') }}" class="btn-ghost" target="_blank">JSON export</a>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button class="btn-fix" id="fix-mode-btn" onclick="startFixMode()">Fix Mode</button>
+          <a href="/api/findings/{{ scan.get('id', '') }}" class="btn-ghost" target="_blank">JSON export</a>
+        </div>
       </div>
 
       <div class="findings-section">
@@ -378,6 +392,8 @@
 
 {% block scripts %}
 <script>
+  const SCAN_ID = '{{ scan.get("id", "") }}';
+
   function filter(sev, btn) {
     document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
@@ -390,6 +406,51 @@
     });
     document.getElementById('shown-label').textContent =
       (sev === 'all' ? 'Showing all ' : 'Showing ') + shown + (sev !== 'all' ? ' ' + sev : '') + ' findings';
+  }
+
+  async function startFixMode() {
+    const btn = document.getElementById('fix-mode-btn');
+    btn.disabled = true;
+    btn.textContent = 'Starting fix agent…';
+
+    // Collect indices of all currently visible findings (based on active filter)
+    const items = document.querySelectorAll('.finding-item[data-sev]');
+    const indices = [];
+    items.forEach((item, i) => {
+      if (item.style.display !== 'none') {
+        indices.push(i);
+      }
+    });
+    
+    if (indices.length === 0) {
+      alert('No findings currently visible to fix! Change your filter.');
+      btn.disabled = false;
+      btn.textContent = 'Fix Mode';
+      return;
+    }
+
+    try {
+      const resp = await fetch('/start-fix', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          scan_id: SCAN_ID,
+          finding_indices: indices,
+        }),
+      });
+      const data = await resp.json();
+      if (data.error) {
+        alert('Error: ' + data.error);
+        btn.disabled = false;
+        btn.textContent = 'Fix Mode';
+        return;
+      }
+      window.location.href = '/fix/' + data.fix_id;
+    } catch (err) {
+      alert('Failed to start fix session: ' + err.message);
+      btn.disabled = false;
+      btn.textContent = 'Fix Mode';
+    }
   }
 </script>
 {% endblock %}

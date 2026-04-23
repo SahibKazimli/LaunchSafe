@@ -1,0 +1,319 @@
+{% extends "base.html" %}
+{% block title %}Fix Session — LaunchSafe{% endblock %}
+
+{% block extra_styles %}
+<style>
+  #screen-fix {
+    min-height: calc(100vh - 65px);
+    padding: 60px 40px;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+  .fix-header { margin-bottom: 28px; }
+  .fix-header h2 { font-family: var(--serif); font-size: 32px; color: #fff; margin-bottom: 6px; }
+  .fix-header p { color: var(--muted); font-size: 13px; font-family: var(--mono); }
+  .fix-header .elapsed { color: var(--accent); }
+
+  .working-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 16px; border-radius: 10px; border: 1px solid var(--accent);
+    background: rgba(200,241,53,0.05);
+    margin-bottom: 20px;
+  }
+  .spinner { width: 12px; height: 12px; border: 1.5px solid rgba(200,241,53,0.2); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; flex-shrink: 0; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .working-label { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+
+  .events-panel {
+    margin-top: 20px; background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 12px; overflow: hidden;
+  }
+  .events-head {
+    padding: 10px 16px; font-family: var(--mono); font-size: 10px;
+    color: var(--muted); text-transform: uppercase; letter-spacing: .08em;
+    border-bottom: 1px solid var(--border);
+  }
+  .events-list {
+    max-height: 320px; overflow-y: auto; padding: 8px 0;
+    font-family: var(--mono); font-size: 11px; line-height: 1.55;
+  }
+  .event {
+    padding: 4px 16px; display: flex; gap: 10px; align-items: flex-start;
+    border-left: 2px solid transparent;
+  }
+  .event .t { color: var(--muted); min-width: 42px; flex-shrink: 0; }
+  .event .kind { min-width: 56px; flex-shrink: 0; font-weight: 500; text-transform: uppercase; font-size: 9px; letter-spacing: .06em; padding-top: 1px; }
+  .event .msg { color: var(--text); word-break: break-word; white-space: pre-wrap; }
+  .event.info .kind { color: var(--muted); }
+  .event.warn { border-left-color: var(--orange); }
+  .event.warn .kind { color: var(--orange); }
+  .event.error { border-left-color: var(--red); }
+  .event.error .kind { color: var(--red); }
+  
+  .event .branch {
+    font-family: var(--mono); font-size: 9px; padding: 1px 6px;
+    border: 1px solid var(--border2); border-radius: 3px;
+    color: var(--muted); flex-shrink: 0; text-transform: lowercase;
+    letter-spacing: .04em; min-width: 64px; text-align: center;
+  }
+
+  .error-banner {
+    background: rgba(255,77,77,0.08); border: 1px solid rgba(255,77,77,0.3);
+    border-radius: 10px; padding: 14px 16px; color: var(--red);
+    font-family: var(--mono); font-size: 12px; line-height: 1.5;
+    margin-bottom: 20px;
+  }
+
+  /* Results styling */
+  #fix-results { display: none; }
+  
+  .review-card {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px; margin-bottom: 24px;
+  }
+  .review-status {
+    display: flex; align-items: center; gap: 10px; font-family: var(--sans);
+    font-weight: 500; font-size: 18px; margin-bottom: 12px;
+  }
+  .status-approved { color: var(--green); }
+  .status-warning { color: var(--orange); }
+  .review-notes { font-size: 14px; color: var(--muted); margin-bottom: 12px; }
+  .review-warnings ul { padding-left: 20px; font-size: 13px; color: var(--orange); margin-bottom: 12px; }
+  .review-conflicts ul { padding-left: 20px; font-size: 13px; color: var(--red); }
+  
+  .group-card {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+    margin-bottom: 20px; overflow: hidden;
+  }
+  .group-header {
+    background: var(--bg2); padding: 16px 20px; border-bottom: 1px solid var(--border);
+  }
+  .group-header h3 { font-family: var(--mono); font-size: 14px; margin-bottom: 4px; color: var(--accent); }
+  .group-header p { font-size: 13px; color: var(--text); }
+  
+  .patch-item {
+    padding: 20px; border-bottom: 1px solid var(--border2);
+  }
+  .patch-item:last-child { border-bottom: none; }
+  .patch-path { font-family: var(--mono); font-size: 12px; color: var(--text); margin-bottom: 8px; font-weight: 500; }
+  .patch-explanation { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+  
+  .diff-block {
+    background: #0b0c0e; border: 1px solid var(--border2); border-radius: 8px;
+    font-family: var(--mono); font-size: 12px; padding: 16px; overflow-x: auto;
+    white-space: pre; line-height: 1.5;
+  }
+  .diff-add { color: #06d6a0; background: rgba(6, 214, 160, 0.1); display: inline-block; width: 100%; }
+  .diff-remove { color: #ff4d4d; background: rgba(255, 77, 77, 0.1); display: inline-block; width: 100%; }
+  .diff-header { color: #4cc9f0; display: inline-block; width: 100%; }
+  
+  .action-row {
+    margin-top: 30px; display: flex; justify-content: flex-end; gap: 12px;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<section id="screen-fix">
+  <div class="fix-header fadein">
+    <h2>Fix Agent Session</h2>
+    <p id="status-label">Initializing… <span class="elapsed" id="elapsed">0s</span></p>
+  </div>
+
+  <div id="error-banner" class="error-banner" style="display:none;"></div>
+
+  <div id="working" class="working-row">
+    <div class="spinner"></div>
+    <div class="working-label" id="working-label">Loading scan context…</div>
+  </div>
+
+  <div id="events-panel" class="events-panel">
+    <div class="events-head">
+      <span>Agent Log</span>
+    </div>
+    <div id="events-list" class="events-list"></div>
+  </div>
+
+  <div id="fix-results" class="fadein">
+    <div class="review-card" id="review-card">
+      <div class="review-status" id="review-status"></div>
+      <div class="review-notes" id="review-notes"></div>
+      <div class="review-warnings" id="review-warnings" style="display:none;"></div>
+      <div class="review-conflicts" id="review-conflicts" style="display:none;"></div>
+    </div>
+    
+    <div id="groups-container"></div>
+    
+    <div class="action-row">
+      <a href="/report/{{ scan_id }}" class="btn-ghost">Back to Report</a>
+      <button class="btn-primary" onclick="alert('Applying patches via GitHub API / local diff tool is coming soon!')">Apply Fixes</button>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const FIX_ID = "{{ fix_id }}";
+
+  const startedAt = Date.now();
+  let pollInterval = setInterval(poll, 1200);
+  let tickInterval = setInterval(tick, 1000);
+  let lastSeq = 0;
+  const allEvents = [];
+
+  function tick() {
+    const s = Math.round((Date.now() - startedAt) / 1000);
+    document.getElementById('elapsed').textContent = s + 's';
+  }
+
+  function renderEventRow(ev) {
+    const row = document.createElement('div');
+    row.className = 'event ' + ev.kind;
+    const branch = ev.branch || 'fix';
+    row.innerHTML =
+      `<span class="t">${ev.t}s</span>` +
+      `<span class="branch b-${branch}">${branch}</span>` +
+      `<span class="kind">${ev.kind}</span>` +
+      `<span class="msg"></span>`;
+    row.querySelector('.msg').textContent = ev.text || '';
+    return row;
+  }
+
+  function renderEvents(events) {
+    if (!events || events.length === 0) return;
+    const list = document.getElementById('events-list');
+    const atBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 20;
+    for (const ev of events) {
+      if (ev.seq && ev.seq <= lastSeq) continue;
+      allEvents.push(ev);
+      list.appendChild(renderEventRow(ev));
+    }
+    if (atBottom) list.scrollTop = list.scrollHeight;
+  }
+
+  function formatDiff(diffText) {
+    if (!diffText) return 'No diff available.';
+    const lines = diffText.split('\n');
+    return lines.map(line => {
+      if (line.startsWith('+')) {
+        return `<span class="diff-add">${escapeHtml(line)}</span>`;
+      } else if (line.startsWith('-')) {
+        return `<span class="diff-remove">${escapeHtml(line)}</span>`;
+      } else if (line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++')) {
+        return `<span class="diff-header">${escapeHtml(line)}</span>`;
+      }
+      return escapeHtml(line);
+    }).join('\n');
+  }
+
+  function escapeHtml(unsafe) {
+    return unsafe
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function renderResults(data) {
+    const review = data.review || {};
+    const patches = data.patches || [];
+    
+    document.getElementById('working').style.display = 'none';
+    document.getElementById('events-panel').style.display = 'none';
+    document.getElementById('fix-results').style.display = 'block';
+    
+    // Render Review
+    const statusEl = document.getElementById('review-status');
+    if (review.approved) {
+      statusEl.innerHTML = `<span class="status-approved">Patches Approved & Conflict-Free</span>`;
+    } else {
+      statusEl.innerHTML = `<span class="status-warning">Review Needed</span>`;
+    }
+    document.getElementById('review-notes').textContent = review.notes || '';
+    
+    if (review.warnings && review.warnings.length > 0) {
+      const wEl = document.getElementById('review-warnings');
+      wEl.style.display = 'block';
+      wEl.innerHTML = '<strong>Warnings:</strong><ul>' + review.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('') + '</ul>';
+    }
+    
+    if (review.conflicts && review.conflicts.length > 0) {
+      const cEl = document.getElementById('review-conflicts');
+      cEl.style.display = 'block';
+      cEl.innerHTML = '<strong>Conflicts:</strong><ul>' + review.conflicts.map(c => `<li>${escapeHtml(c)}</li>`).join('') + '</ul>';
+    }
+
+    // Render Patches
+    const container = document.getElementById('groups-container');
+    container.innerHTML = '';
+    
+    for (const group of patches) {
+      const gCard = document.createElement('div');
+      gCard.className = 'group-card';
+      
+      const head = document.createElement('div');
+      head.className = 'group-header';
+      head.innerHTML = `<h3>${escapeHtml(group.group_id)}</h3><p>${escapeHtml(group.notes || '')}</p>`;
+      gCard.appendChild(head);
+      
+      const pList = group.patches || [];
+      for (const p of pList) {
+        const pItem = document.createElement('div');
+        pItem.className = 'patch-item';
+        pItem.innerHTML = `
+          <div class="patch-path">${escapeHtml(p.path)}</div>
+          <div class="patch-explanation">${escapeHtml(p.explanation)}</div>
+          <div class="diff-block">${formatDiff(p.diff)}</div>
+        `;
+        gCard.appendChild(pItem);
+      }
+      
+      container.appendChild(gCard);
+    }
+  }
+
+  async function poll() {
+    let data;
+    try {
+      const res = await fetch('/fix-status/' + FIX_ID);
+      data = await res.json();
+    } catch (e) { return; }
+    
+    if (data.events) {
+      renderEvents(data.events);
+      if (data.events.length > 0) {
+        lastSeq = data.events[data.events.length - 1].seq || lastSeq;
+      }
+    }
+
+    if (data.error) {
+      const banner = document.getElementById('error-banner');
+      banner.style.display = 'block';
+      banner.textContent = 'Fix agent error: ' + data.error;
+      document.getElementById('working').style.display = 'none';
+      clearInterval(pollInterval);
+      clearInterval(tickInterval);
+      return;
+    }
+
+    const working = document.getElementById('working-label');
+    if (data.status === 'running') {
+      working.textContent = 'Agent is planning and generating patches…';
+    }
+
+    if (data.status === 'done') {
+      clearInterval(pollInterval);
+      clearInterval(tickInterval);
+      document.getElementById('status-label').innerHTML =
+        'Complete <span class="elapsed">' +
+        Math.round((Date.now() - startedAt) / 1000) + 's</span>';
+      
+      renderResults(data);
+    }
+  }
+
+  poll();
+</script>
+{% endblock %}

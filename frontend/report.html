@@ -167,13 +167,13 @@
   }
 
   .btn-fix {
-    background: linear-gradient(135deg, #06d6a0, #4cc9f0);
-    color: #0b0c0e; font-family: var(--sans); font-weight: 600;
-    font-size: 13px; padding: 10px 20px; border: none;
+    background: var(--accent);
+    color: #0b0c0e; font-family: var(--sans); font-weight: 500;
+    font-size: 14px; padding: 10px 20px; border: none;
     border-radius: 10px; cursor: pointer; text-decoration: none;
-    transition: opacity .15s, transform .1s;
+    transition: background .15s, transform .1s;
   }
-  .btn-fix:hover { opacity: 0.85; }
+  .btn-fix:hover { background: var(--accent2); }
   .btn-fix:active { transform: scale(0.98); }
   .btn-fix:disabled { opacity: 0.5; cursor: wait; }
 </style>

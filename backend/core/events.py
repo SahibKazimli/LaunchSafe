@@ -17,6 +17,8 @@ from agents.runtime_log import set_event_sink
 from core import scan_store as _ss
 
 
+from core import fix_store as _fs
+
 def push_event(
     scan_id: str,
     kind: str,
@@ -24,8 +26,11 @@ def push_event(
     branch: str | None = None,
     **extra: object,
 ) -> None:
-    """Append a timestamped event to a scan's event ring buffer."""
+    """Append a timestamped event to a scan or fix event ring buffer."""
+    # scan_id could actually be a fix_id if emitted from the fix graph
     scan = _ss.get_scan(scan_id)
+    if scan is None:
+        scan = _fs.get_fix_session(scan_id)
     if scan is None:
         return
 

@@ -63,7 +63,7 @@ async def report_page(request: Request, scan_id: str):
         ef["_score"] = row
         enriched.append(ef)
     return templates.TemplateResponse(request, "report.html", {
-        "scan": scan,
+        "scan": {**scan, "id": scan_id},
         "findings": enriched,
         "counts": counts,
         "total": len(findings),
@@ -234,6 +234,44 @@ async def fix_page(request: Request, fix_id: str):
         "scan_id": scan_id,
     })
 
+
+@router.get("/debug/fix/{fix_id}")
+async def debug_fix(fix_id: str):
+    """Raw dump of a fix session — diagnose patch generation issues."""
+    session = _fs.get_fix_session(fix_id)
+    if not session:
+        return {"error": "not found"}
+    patches = session.get("patches", [])
+    return {
+        "status": session.get("status"),
+        "error": session.get("error"),
+        "finding_indices": session.get("finding_indices"),
+        "fix_plan_groups": len((session.get("fix_plan") or {}).get("groups", [])),
+        "patch_groups": len(patches),
+        "patches_per_group": [
+            {"group_id": p.get("group_id"), "patch_count": len(p.get("patches", [])), "notes": p.get("notes", "")}
+            for p in patches
+        ],
+        "review_approved": (session.get("review") or {}).get("approved"),
+        "review_notes": (session.get("review") or {}).get("notes"),
+        "events": session.get("events", []),
+    }
+
+
+@router.get("/debug/scan/{scan_id}")
+async def debug_scan(scan_id: str):
+    """Check what a scan stored — especially whether _files was stashed."""
+    scan = _ss.get_scan(scan_id)
+    if not scan:
+        return {"error": "not found"}
+    files = scan.get("_files", {})
+    return {
+        "status": scan.get("status"),
+        "finding_count": len(scan.get("findings", [])),
+        "findings_severity": [f.get("severity") for f in scan.get("findings", [])],
+        "files_stashed": len(files),
+        "file_keys": list(files.keys())[:20],
+    }
 
 
 # Demo / fallback data

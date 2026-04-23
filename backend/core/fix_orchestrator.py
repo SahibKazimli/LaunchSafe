@@ -43,7 +43,7 @@ async def run_fix_session(
         return
 
     try:
-        from agents.fix.graph import get_fix_agent
+        from agents.fix.fix_graph import get_fix_agent
 
         agent = get_fix_agent()
         result = await agent.ainvoke({

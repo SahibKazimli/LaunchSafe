@@ -20,22 +20,6 @@
   .hero-sub { color: var(--muted); font-size: 15px; max-width: 480px; margin: 0 auto 16px; }
   .hero-sub-green { color: var(--accent); font-family: var(--sans); font-size: 14px; max-width: 480px; margin: 0 auto 40px; }
 
-  .upload-zone {
-    border: 1.5px dashed var(--border2); border-radius: 16px;
-    padding: 48px 32px; text-align: center; cursor: pointer;
-    transition: all .2s; background: var(--bg2); position: relative; margin-bottom: 16px;
-  }
-  .upload-zone:hover, .upload-zone.dragover { border-color: var(--accent); background: rgba(200,241,53,0.04); }
-  .upload-icon { font-size: 32px; margin-bottom: 12px; opacity: 0.5; }
-  .upload-zone h3 { font-size: 15px; font-weight: 500; color: var(--text); margin-bottom: 6px; }
-  .upload-zone p { font-size: 13px; color: var(--muted); }
-  #file-input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
-
-  .file-selected { font-family: var(--sans); font-size: 12px; color: var(--accent); margin-top: 8px; display: none; }
-
-  .divider { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 12px; margin: 16px 0; }
-  .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
-
   .github-input-row { display: flex; gap: 8px; }
   .github-input-row input {
     flex: 1; background: var(--bg2); border: 1px solid var(--border2);
@@ -65,7 +49,7 @@
   <div class="hero fadein">
     <div class="hero-eyebrow">Security Audit Platform</div>
     <h1>More than a scan.<br><span class="green-text">A full-stack security audit.</span></h1>
-    <p class="hero-sub">Upload your codebase or paste a GitHub URL. Get a deep, context-aware analysis across code, infrastructure, auth logic, dependencies, and data handling to uncover risks shallow scanners miss.</p>
+    <p class="hero-sub">Paste a public GitHub URL to clone and scan. Get a deep, context-aware analysis across code, infrastructure, auth logic, dependencies, and data handling to uncover risks shallow scanners miss.</p>
     <p class="hero-sub-green">Every finding is aligned with globally recognized security standards like OWASP and CVSS.</p>
 
     <div class="modules-preview">
@@ -77,16 +61,7 @@
       <div class="mod-chip"><strong>Dependencies</strong>CVEs, known vulns</div>
     </div>
 
-    <form id="scan-form" method="POST" action="/start-scan" enctype="multipart/form-data">
-      <div class="upload-zone" id="dropzone">
-        <input type="file" name="file" id="file-input" accept=".zip">
-        <h3>Drop your codebase here</h3>
-        <p>ZIP archive · .env files · Terraform configs · OpenAPI specs</p>
-      </div>
-      <div class="file-selected" id="file-selected-label"></div>
-
-      <div class="divider">or scan a GitHub URL (uses demo analysis)</div>
-
+    <form id="scan-form" method="POST" action="/start-scan">
       <div class="github-input-row">
         <input type="text" name="github_url" id="github-url" placeholder="https://github.com/your-org/your-repo" />
       </div>
@@ -99,25 +74,6 @@
 
 {% block scripts %}
 <script>
-  const dz = document.getElementById('dropzone');
-  const fi = document.getElementById('file-input');
-  const label = document.getElementById('file-selected-label');
-
-  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
-  dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
-  dz.addEventListener('drop', e => {
-    e.preventDefault(); dz.classList.remove('dragover');
-    fi.files = e.dataTransfer.files;
-    showFile(fi.files[0]);
-  });
-  fi.addEventListener('change', () => showFile(fi.files[0]));
-
-  function showFile(f) {
-    if (!f) return;
-    label.style.display = 'block';
-    label.textContent = f.name + ' (' + (f.size / 1024).toFixed(0) + ' KB)';
-  }
-
   document.getElementById('scan-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = e.target.querySelector('[type=submit]');

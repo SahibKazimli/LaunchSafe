@@ -3,12 +3,13 @@
 Every tunable constant lives here.  Modules import what they need instead
 of defining their own defaults.
 
-**Gemini / cost tuning:** Defaults err on the cheaper side. Override at
-runtime with env vars (this module reads ``LAUNCHSAFE_<KEY>``, e.g.
-``LAUNCHSAFE_SPEC_MAX_TOOL_CALLS``, ``LAUNCHSAFE_SYNTH_MAX_TOKENS``).
-The largest savings are usually ``SPEC_MAX_TOOL_CALLS`` (fewer tool
-round-trips per specialist) and output token caps on recon / synth /
-ai_scan / fix.
+**Cost tuning:** Default provider is **Anthropic Claude** (set
+``ANTHROPIC_API_KEY``). Override at runtime with env vars
+(``LAUNCHSAFE_<KEY>``). The largest savings are usually
+``LAUNCHSAFE_SPEC_MAX_TOOL_CALLS`` (fewer tool round-trips per
+specialist) and output token caps on recon / synth / ai_scan / fix. For
+higher quality on large patches, raise ``LAUNCHSAFE_FIX_PATCH_MAX_TOKENS``
+or switch ``LAUNCHSAFE_LLM_MODEL`` (default is Sonnet 4.6).
 """
 
 from __future__ import annotations
@@ -65,23 +66,24 @@ def spec_react_recursion_limit() -> int:
 # LLM / agent knobs
 
 
-LLM_MODEL: str             = _env_str("LLM_MODEL", "gemini-3.1-pro-preview")
+# Default: Claude Sonnet 4.6 (`claude-sonnet-4-6`). Override with LAUNCHSAFE_LLM_MODEL.
+LLM_MODEL: str             = _env_str("LLM_MODEL", "claude-sonnet-4-6")
 
-SPEC_RECURSION_LIMIT: int   = _env_int("SPEC_RECURSION_LIMIT", 24)
-SPEC_MAX_TOKENS: int        = _env_int("SPEC_MAX_TOKENS", 3072)
+SPEC_RECURSION_LIMIT: int   = _env_int("SPEC_RECURSION_LIMIT", 15)
+SPEC_MAX_TOKENS: int        = _env_int("SPEC_MAX_TOKENS", 1024)
 # Primary credit knob: agents are instructed to use at most this many tool
 # invocations; see spec_react_recursion_limit() for LangGraph *step* count.
-SPEC_MAX_TOOL_CALLS: int    = _env_int("SPEC_MAX_TOOL_CALLS", 14)
+SPEC_MAX_TOOL_CALLS: int    = _env_int("SPEC_MAX_TOOL_CALLS", 7)
 
-RECON_MAX_TOKENS: int       = _env_int("RECON_MAX_TOKENS", 1536)
-SYNTH_MAX_TOKENS: int       = _env_int("SYNTH_MAX_TOKENS", 1536)
-AI_SCAN_MAX_TOKENS: int     = _env_int("AI_SCAN_MAX_TOKENS", 1536)
+RECON_MAX_TOKENS: int       = _env_int("RECON_MAX_TOKENS", 1024)
+SYNTH_MAX_TOKENS: int       = _env_int("SYNTH_MAX_TOKENS", 512)
+AI_SCAN_MAX_TOKENS: int     = _env_int("AI_SCAN_MAX_TOKENS", 1024)
 
 # Phase-2 fix graph (separate caps so patch generation can stay higher than plan/review)
-FIX_PLAN_MAX_TOKENS: int    = _env_int("FIX_PLAN_MAX_TOKENS", 1536)
-# Patch step needs a generous cap: structured FilePatch + snippets + diff fills fast.
-FIX_PATCH_MAX_TOKENS: int   = _env_int("FIX_PATCH_MAX_TOKENS", 12_288)
-FIX_REVIEW_MAX_TOKENS: int  = _env_int("FIX_REVIEW_MAX_TOKENS", 1536)
+FIX_PLAN_MAX_TOKENS: int    = _env_int("FIX_PLAN_MAX_TOKENS", 768)
+# Large patches may need a higher cap via env (trade-off vs. credits).
+FIX_PATCH_MAX_TOKENS: int   = _env_int("FIX_PATCH_MAX_TOKENS", 4096)
+FIX_REVIEW_MAX_TOKENS: int  = _env_int("FIX_REVIEW_MAX_TOKENS", 512)
 # When an ingested file is at most this many characters, the fix prompt includes
 # the **entire** file (not an excerpt). Matches typical ingest cap.
 FIX_PROMPT_FULL_FILE_MAX_CHARS: int = _env_int(

@@ -44,6 +44,10 @@ interface Finding {
   line_end?: number;
   snippet?: string;
   highlight_lines?: number[];
+  /** Inclusive 1-based file line ranges; when set, drive highlighting (overrides single-line heuristics). */
+  highlight_line_ranges?: [number, number][];
+  /** True when the excerpt could not show every line in `highlight_line_ranges` / `highlight_lines`. */
+  code_highlight_truncated?: boolean;
   snippet_start_line?: number;
   code_language?: string;
 }
@@ -208,29 +212,60 @@ function splitSnippetLines(snippet: string): string[] {
   return parts;
 }
 
+function fileLineInHighlightRanges(
+  fileLine: number,
+  lineRanges: [number, number][] | undefined,
+): boolean {
+  if (!lineRanges || !lineRanges.length) return false;
+  for (const lineRange of lineRanges) {
+    if (!Array.isArray(lineRange) || lineRange.length < 2) continue;
+    const rangeStart = Number(lineRange[0]);
+    const rangeEnd = Number(lineRange[1]);
+    if (!Number.isFinite(rangeStart) || !Number.isFinite(rangeEnd)) continue;
+    const inclusiveStart = Math.min(rangeStart, rangeEnd);
+    const inclusiveEnd = Math.max(rangeStart, rangeEnd);
+    if (fileLine >= inclusiveStart && fileLine <= inclusiveEnd) return true;
+  }
+  return false;
+}
+
 function renderCodeLines(
   snippet: string,
   startLine: number,
   highlightLines: number[] | undefined,
   citedFileLine: number | undefined,
+  fileLineRanges: [number, number][] | undefined,
 ): string {
-  const raw = splitSnippetLines(snippet);
-  const hl = new Set(highlightLines && highlightLines.length ? highlightLines : []);
-  return raw
-    .map((line, j) => {
-      const n = startLine + j;
-      const byIndex = hl.has(j + 1);
-      const byCited = citedFileLine != null && n === citedFileLine;
-      const isHl = byIndex || byCited;
-      const rowCls = isHl ? 'code-line code-line--hl' : 'code-line';
-      return `<div class="${rowCls}" data-line="${n}"><span class="ln">${n}</span><span class="src">${escapeHtml(line)}</span></div>`;
+  const snippetLines = splitSnippetLines(snippet);
+  const lastLineInExcerpt = startLine + Math.max(0, snippetLines.length - 1);
+  const relativeHighlightSet = new Set(
+    highlightLines && highlightLines.length ? highlightLines : [],
+  );
+  const highlightByFileRanges = !!(
+    fileLineRanges && fileLineRanges.length
+  );
+  return snippetLines
+    .map((lineText, lineIndex) => {
+      const fileLine = startLine + lineIndex;
+      const fromRelativeList =
+        !highlightByFileRanges && relativeHighlightSet.has(lineIndex + 1);
+      const fromLineRanges =
+        highlightByFileRanges &&
+        fileLine >= startLine &&
+        fileLine <= lastLineInExcerpt &&
+        fileLineInHighlightRanges(fileLine, fileLineRanges);
+      const fromCitedAlone =
+        !highlightByFileRanges && citedFileLine != null && fileLine === citedFileLine;
+      const isHighlighted = fromLineRanges || fromRelativeList || fromCitedAlone;
+      const rowClass = isHighlighted ? 'code-line code-line--hl' : 'code-line';
+      return `<div class="${rowClass}" data-line="${fileLine}"><span class="ln">${fileLine}</span><span class="src">${escapeHtml(lineText)}</span></div>`;
     })
     .join('');
 }
 
 function openCodeModal(index: number): void {
-  const f = _findings[index];
-  if (!f || !f.snippet || !String(f.snippet).trim()) return;
+  const finding = _findings[index];
+  if (!finding || !finding.snippet || !String(finding.snippet).trim()) return;
 
   const titleEl = document.getElementById('code-modal-title')!;
   const metaEl = document.getElementById('code-modal-meta')!;
@@ -240,27 +275,36 @@ function openCodeModal(index: number): void {
   const ghLink = document.getElementById('code-modal-gh') as HTMLAnchorElement;
   const backdrop = document.getElementById('code-modal-backdrop')!;
 
-  titleEl.textContent = f.title;
-  const sev = normalizeSeverity(f.severity);
-  const fileLabel = f.file_path || f.location || '—';
-  const ls = f.line_start ?? '—';
-  const le = f.line_end ?? ls;
-  metaEl.innerHTML = `${escapeHtml(sev)} · ${escapeHtml(fileLabel)} · lines ${ls}–${le}`;
+  titleEl.textContent = finding.title;
+  const sev = normalizeSeverity(finding.severity);
+  const fileLabel = finding.file_path || finding.location || '—';
+  const lineStartLabel = finding.line_start ?? '—';
+  const lineEndLabel = finding.line_end ?? lineStartLabel;
+  metaEl.innerHTML = `${escapeHtml(sev)} · ${escapeHtml(fileLabel)} · lines ${lineStartLabel}–${lineEndLabel}`;
 
-  if (f.fix && f.fix.trim()) {
+  if (finding.fix && finding.fix.trim()) {
     fixWrap.style.display = '';
-    fixText.textContent = f.fix;
+    fixText.textContent = finding.fix;
   } else {
     fixWrap.style.display = 'none';
   }
 
-  const start = f.snippet_start_line ?? 1;
-  const nLines = splitSnippetLines(f.snippet).length;
-  const endLine = start + Math.max(0, nLines - 1);
-  const cited = f.line_start;
+  const snippetStartLine = finding.snippet_start_line ?? 1;
+  const snippetLineCount = splitSnippetLines(finding.snippet).length;
+  const excerptEndLine = snippetStartLine + Math.max(0, snippetLineCount - 1);
+  const primaryCitedFileLine = finding.line_start;
   const cave = document.getElementById('code-modal-caveat')!;
-  if (cited != null && nLines > 0 && (cited < start || cited > endLine)) {
-    cave.textContent = `Cited line ${cited} is outside this excerpt (showing ${start}–${endLine}). Open the full file on GitHub.`;
+  if (
+    primaryCitedFileLine != null &&
+    snippetLineCount > 0 &&
+    (primaryCitedFileLine < snippetStartLine || primaryCitedFileLine > excerptEndLine)
+  ) {
+    cave.textContent = `Cited line ${primaryCitedFileLine} is outside this excerpt (showing ${snippetStartLine}–${excerptEndLine}). Open the full file on GitHub.`;
+    cave.hidden = false;
+    cave.classList.add('is-visible');
+  } else if (finding.code_highlight_truncated) {
+    cave.textContent =
+      `Some related lines are outside this excerpt (showing ${snippetStartLine}–${excerptEndLine}). Open the full file on GitHub for the rest.`;
     cave.hidden = false;
     cave.classList.add('is-visible');
   } else {
@@ -268,16 +312,20 @@ function openCodeModal(index: number): void {
     cave.hidden = true;
     cave.classList.remove('is-visible');
   }
+  const highlightFileLineRanges = Array.isArray(finding.highlight_line_ranges)
+    ? finding.highlight_line_ranges
+    : undefined;
   scrollEl.innerHTML = renderCodeLines(
-    f.snippet,
-    start,
-    f.highlight_lines,
-    typeof f.line_start === 'number' ? f.line_start : undefined,
+    finding.snippet,
+    snippetStartLine,
+    finding.highlight_lines,
+    typeof finding.line_start === 'number' ? finding.line_start : undefined,
+    highlightFileLineRanges,
   );
 
   const url =
-    f.file_path && f.line_start != null && f.line_end != null
-      ? buildGitHubBlobUrl(_scanTarget, f.file_path, f.line_start, f.line_end)
+    finding.file_path && finding.line_start != null && finding.line_end != null
+      ? buildGitHubBlobUrl(_scanTarget, finding.file_path, finding.line_start, finding.line_end)
       : null;
   if (url) {
     ghLink.style.display = '';
@@ -298,8 +346,11 @@ function openCodeModal(index: number): void {
   window.addEventListener('keydown', _escHandler);
 
   requestAnimationFrame(() => {
-    const first = scrollEl.querySelector('.code-line--hl') as HTMLElement | null;
-    (first || scrollEl.firstElementChild)?.scrollIntoView({ block: 'center', behavior: 'auto' });
+    const firstHighlightedRow = scrollEl.querySelector('.code-line--hl') as HTMLElement | null;
+    (firstHighlightedRow || scrollEl.firstElementChild)?.scrollIntoView({
+      block: 'center',
+      behavior: 'auto',
+    });
   });
 }
 

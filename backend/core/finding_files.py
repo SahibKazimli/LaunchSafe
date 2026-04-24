@@ -7,6 +7,8 @@ only sources tied to recorded findings, so Phase 2 can patch real code.
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Any
 
 from agents.prompts.fix_prompts import (
@@ -180,14 +182,212 @@ def build_finding_file_bundle(
 
 
 def parse_line_number_from_location(location: str) -> int | None:
-    """Return 1-based line number from ``path:42``-style locations, if present."""
+    """Return 1-based line from ``...path:12`` or ``...path:10-20`` (range: first line)."""
     loc = (location or "").strip().replace("\\", "/")
-    if ":" not in loc:
+    if not loc:
         return None
-    _base, _sep, last = loc.rpartition(":")
-    if last.isdigit():
-        return int(last)
+    m = re.search(r":(\d+)-(\d+)\s*$", loc)
+    if m:
+        return int(m.group(1))
+    m = re.search(r":(\d+)\s*$", loc)
+    if m:
+        return int(m.group(1))
     return None
+
+
+def _coerce_positive_int(x: Any) -> int | None:
+    if x is None or x is False:
+        return None
+    try:
+        v = int(x)
+    except (TypeError, ValueError):
+        return None
+    return v if v >= 1 else None
+
+
+def _is_weak_anchor_line(line_text: str) -> bool:
+    """Model output often points at a closing `)}];` or punctuation-only line — nudge to real code.
+
+    A line is **substantive** if (after stripping end-of-line comments) it has a word
+    (2+ letters) or a 3+ digit number (e.g. status code on its own).
+    """
+    t = line_text.rstrip("\n").split("#", 1)[0].strip()
+    if not t:
+        return True
+    if re.search(r"[A-Za-z]{2,}", t):
+        return False
+    if re.search(r"^\d{3,}$", t):
+        return False
+    # Don’t nudge off lines that contain multi-digit numbers (e.g. real line-no labels,
+    # `user_id: 10`, or similar); avoids massive upward walks on synthetic "L12" test lines.
+    if re.search(r"\d{2,}", t):
+        return False
+    return True
+
+
+def _nudge_cited_off_weak_anchor(
+    raw_lines: list[str],
+    cited: int,
+    *,
+    max_up: int = 35,
+) -> int:
+    """If the reported line is only delimiters, walk up to a substantive line."""
+    n = len(raw_lines)
+    c = min(max(1, cited), n)
+    up = 0
+    while up < max_up and c > 1 and _is_weak_anchor_line(raw_lines[c - 1]):
+        c -= 1
+        up += 1
+    return c
+
+
+_EXT_TO_HLJS_LANG: dict[str, str] = {
+    ".py": "python",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".json": "json",
+    ".md": "markdown",
+    ".yml": "yaml",
+    ".yaml": "yaml",
+    ".tf": "hcl",
+    ".tfvars": "hcl",
+    ".hcl": "hcl",
+    ".go": "go",
+    ".rs": "rust",
+    ".java": "java",
+    ".kt": "kotlin",
+    ".kts": "kotlin",
+    ".rb": "ruby",
+    ".php": "php",
+    ".cs": "csharp",
+    ".swift": "swift",
+    ".sql": "sql",
+    ".sh": "bash",
+    ".bash": "bash",
+    ".zsh": "bash",
+    ".dockerfile": "dockerfile",
+    "dockerfile": "dockerfile",
+    ".xml": "xml",
+    ".html": "xml",
+    ".css": "css",
+    ".scss": "scss",
+    ".less": "less",
+    ".vue": "html",
+    ".svelte": "html",
+    ".toml": "ini",
+    ".ini": "ini",
+    ".cfg": "ini",
+    ".c": "c",
+    ".h": "c",
+    ".cpp": "cpp",
+    ".cc": "cpp",
+    ".hpp": "cpp",
+}
+
+
+def infer_code_language_from_path(file_key: str) -> str:
+    """Map file path to a highlight.js / Prism style language id for the report UI."""
+    name = (file_key or "").split("/")[-1].lower()
+    if not name or "." not in name:
+        if name == "dockerfile":
+            return "dockerfile"
+        return "plaintext"
+    suf = Path(name).suffix.lower()
+    if not suf and name:
+        if name == "dockerfile":
+            return "dockerfile"
+        return "plaintext"
+    return _EXT_TO_HLJS_LANG.get(suf, "plaintext")
+
+
+def enrich_finding_code_context(
+    finding: dict[str, Any],
+    all_files: dict[str, str],
+    *,
+    line_margin: int = 50,
+    max_window_lines: int = 200,
+) -> dict[str, Any]:
+    """Attach a wide source excerpt + line metadata for the report code modal.
+
+    Only populates when ``location`` resolves to a file and a 1-based line number.
+    """
+    out: dict[str, Any] = dict(finding)
+    if not all_files or not isinstance(finding, dict):
+        return out
+
+    key = resolve_path_to_canonical_key(finding.get("location", ""), all_files)
+    if not key or key not in all_files:
+        return out
+
+    loc = str(finding.get("location", "") or "")
+    line_from_loc = parse_line_number_from_location(loc)
+    line_from_field = _coerce_positive_int(
+        finding.get("line_start")
+    ) or _coerce_positive_int(finding.get("line_end"))
+    # Always prefer the line embedded in `location` (`path:line`). It is a single
+    # citation; optional `line_start` from structured output often drifts and
+    # would override with a different number, centering the wrong code in the modal.
+    if line_from_loc is not None:
+        line = line_from_loc
+    else:
+        line = line_from_field
+    if line is None:
+        return out
+
+    content = all_files[key]
+    raw_lines = content.splitlines(keepends=True)
+    n = len(raw_lines)
+    if n == 0:
+        return out
+
+    cited = min(max(1, line), n)
+    cited = _nudge_cited_off_weak_anchor(raw_lines, cited)
+    half = min(line_margin, max_window_lines // 2)
+    lo = max(1, cited - half)
+    hi = min(n, cited + half)
+    if hi - lo + 1 > max_window_lines:
+        lo = max(1, cited - (max_window_lines // 2))
+        hi = min(n, lo + max_window_lines - 1)
+        if hi - lo + 1 < max_window_lines:
+            lo = max(1, hi - max_window_lines + 1)
+    if not (lo <= cited <= hi):
+        span = min(max_window_lines, n)
+        lo = max(1, cited - span // 2)
+        hi = min(n, lo + span - 1)
+        if hi - lo + 1 < span and lo > 1:
+            lo = max(1, hi - span + 1)
+    if cited < lo:
+        lo = max(1, cited)
+    if cited > hi:
+        hi = min(n, cited)
+    if hi < lo:
+        lo = hi = cited
+
+    snippet = "".join(raw_lines[lo - 1 : hi])
+    rel_highlight = [cited - lo + 1]
+
+    out["file_path"] = key
+    out["line_start"] = cited
+    out["line_end"] = cited
+    out["snippet"] = snippet
+    out["highlight_lines"] = rel_highlight
+    out["snippet_start_line"] = lo
+    out["code_language"] = infer_code_language_from_path(key)
+    return out
+
+
+def enrich_findings_code_context(
+    findings: list[dict],
+    all_files: dict[str, str],
+) -> list[dict]:
+    """Enrich every finding with optional code context fields."""
+    if not all_files or not findings:
+        return [dict(f) for f in findings] if findings else []
+    return [enrich_finding_code_context(f, all_files) for f in findings if isinstance(f, dict)]
 
 
 def build_excerpt_for_fix_prompt(

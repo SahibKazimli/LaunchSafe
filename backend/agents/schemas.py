@@ -60,7 +60,13 @@ class Finding(BaseModel):
     severity: str = Field(description="one of: critical, high, medium, low")
     module: str = Field(description="one of: secrets, auth, api, cloud, privacy, deps, cicd, authz, crypto, ssrf, injection, general")
     title: str
-    location: str = Field(description="path[:line] — the file and, if known, the line number")
+    location: str = Field(
+        description=(
+            "path[:line] — file and the **first line of the vulnerable/suspicious code** "
+            "(e.g. the route `def` or the mis-authorized `return`), not a blank line and "
+            "not a line that is only a closing `)`, `}`, or `]`"
+        )
+    )
     description: str
     fix: str
     priority: int = Field(description="1 (most urgent) to 5", ge=1, le=5)
@@ -103,6 +109,15 @@ class Finding(BaseModel):
             "test/example/doc."
         ),
     )
+    # Filled by core.finding_files.enrich_findings_code_context (called from
+    # core.orchestrator.run_scan before findings are stored); LLMs omit these.
+    file_path: Optional[str] = None
+    line_start: Optional[int] = None
+    line_end: Optional[int] = None
+    snippet: Optional[str] = None
+    highlight_lines: Optional[list[int]] = None
+    snippet_start_line: Optional[int] = None
+    code_language: Optional[str] = None
 
 
 class AuditReport(BaseModel):

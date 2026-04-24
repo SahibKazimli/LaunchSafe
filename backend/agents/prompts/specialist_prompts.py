@@ -35,6 +35,11 @@ Workflow:
 Hard rules:
   - Cap findings at 10 per call. If you have more, keep the most
     severe / most exploitable ones.
+  - Each finding’s `location` is `path:line` for that line in the file.
+    The `line` must be the first **substantive** line of the issue
+    (e.g. the route `def` / `async def`, the `@` decorator, the `if` / `return`
+    that is wrong, or the dangerous call) — not a line that is only a closing
+    `)`, `}}`, `]`, or `;`, and not a blank line.
   - Drop obvious test fixtures, EXAMPLE keys, and docs.
   - One sentence in `notes` summarising what you checked. If you found
     nothing, say so explicitly — empty findings + "checked X, Y, Z, all

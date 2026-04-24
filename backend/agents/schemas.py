@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import AliasChoices, BaseModel, Field, model_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
 from agents.prompts.audit_rubrics import (
     COMPLIANCE_INSTRUCTIONS,
@@ -20,6 +20,28 @@ from agents.prompts.audit_rubrics import (
 )
 
 Exposure = Literal["production", "internal", "test", "example", "doc"]
+
+
+def coerce_highlight_line_ranges(raw_value: object) -> list[tuple[int, int]] | None:
+    """Normalize JSON `[[1,2],[3,3]]` into 1-based inclusive (start, end) pairs."""
+    if raw_value is None:
+        return None
+    if not isinstance(raw_value, (list, tuple)) or not raw_value:
+        return None
+    normalized_ranges: list[tuple[int, int]] = []
+    for raw_pair in raw_value:
+        if not isinstance(raw_pair, (list, tuple)) or len(raw_pair) != 2:
+            continue
+        try:
+            start_line, end_line = int(raw_pair[0]), int(raw_pair[1])
+        except (TypeError, ValueError):
+            continue
+        if start_line < 1 or end_line < 1:
+            continue
+        if start_line > end_line:
+            start_line, end_line = end_line, start_line
+        normalized_ranges.append((start_line, end_line))
+    return normalized_ranges or None
 
 
 class ComplianceRef(BaseModel):
@@ -62,13 +84,19 @@ class Finding(BaseModel):
     title: str
     location: str = Field(
         description=(
-            "path[:line] — file and the **first line of the vulnerable/suspicious code** "
-            "(e.g. the route `def` or the mis-authorized `return`), not a blank line and "
-            "not a line that is only a closing `)`, `}`, or `]`"
+            "path[:line] — must be a line a reviewer can look at to see the *same* problem "
+            "as `title` and `description` (the named route/handler, missing check, or bad "
+            "query) — not a different function in the file, not a random line, and not only "
+            "a closing `)`, `}`, or `]`"
         )
     )
     description: str
-    fix: str
+    fix: str = Field(
+        description=(
+            "Concrete, actionable fix tied to *this* finding: name the function, dependency, "
+            "or file to change. Do not hand-wave or contradict the issue you described above."
+        )
+    )
     priority: int = Field(description="1 (most urgent) to 5", ge=1, le=5)
     is_true_positive: bool = True
     rationale: Optional[str] = None
@@ -109,6 +137,16 @@ class Finding(BaseModel):
             "test/example/doc."
         ),
     )
+    highlight_line_ranges: Optional[list[tuple[int, int]]] = Field(
+        default=None,
+        description=(
+            "Optional. Inclusive 1-based line ranges in the *same* file as `location`, e.g. "
+            "[[12, 18], [40, 42]] when the same issue must be read at multiple non-adjacent "
+            "or broad spots. Ranges should match what you name in the title/description. "
+            "Omit when `location:line` alone is enough. The report can highlight all ranges in "
+            "the code modal."
+        ),
+    )
     # Filled by core.finding_files.enrich_findings_code_context (called from
     # core.orchestrator.run_scan before findings are stored); LLMs omit these.
     file_path: Optional[str] = None
@@ -118,6 +156,13 @@ class Finding(BaseModel):
     highlight_lines: Optional[list[int]] = None
     snippet_start_line: Optional[int] = None
     code_language: Optional[str] = None
+
+    @field_validator("highlight_line_ranges", mode="before")
+    @classmethod
+    def _validate_highlight_ranges(
+        cls, raw_value: object
+    ) -> list[tuple[int, int]] | None:
+        return coerce_highlight_line_ranges(raw_value)
 
 
 class AuditReport(BaseModel):

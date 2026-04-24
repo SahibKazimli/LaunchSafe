@@ -20,7 +20,7 @@ from tools.scanners import (
     scan_secrets,
 )
 from core import scan_store as _ss
-from core.finding_files import build_finding_file_bundle
+from core.finding_files import build_finding_file_bundle, enrich_findings_code_context
 
 
 async def run_scan(scan_id: str, files: dict[str, str]) -> None:
@@ -109,6 +109,10 @@ async def run_scan(scan_id: str, files: dict[str, str]) -> None:
                 f"{len(scan.get('branches', {}))} specialist branches."
             )
 
+        # Wide excerpt + line metadata for the report code modal (see
+        # core.finding_files.enrich_finding_code_context).
+        report_findings = enrich_findings_code_context(report_findings, files)
+
         score, grade = compute_score(report_findings)
         finding_files = build_finding_file_bundle(files, report_findings)
         _ss.update_scan(
@@ -141,6 +145,7 @@ async def run_scan(scan_id: str, files: dict[str, str]) -> None:
                 f"Pipeline crashed, but salvaged {len(salvaged)} branch findings.",
                 branch="outer",
             )
+            salvaged = enrich_findings_code_context(salvaged, files)
             score, grade = compute_score(salvaged)
             finding_files = build_finding_file_bundle(files, salvaged)
             _ss.update_scan(
@@ -189,6 +194,8 @@ async def _run_regex_fallback(scan_id: str, files: dict[str, str]) -> None:
             {"id": mod_id, "name": mod_name, "count": len(results)}
         )
         _ss.update_scan(scan_id, findings=list(all_findings))
+
+    all_findings = enrich_findings_code_context(all_findings, files)
 
     score, grade = compute_score(all_findings)
     finding_files = build_finding_file_bundle(files, all_findings)

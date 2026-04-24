@@ -46,58 +46,66 @@ _ID_TO_URL["ISO27001-A.12"] = "https://www.iso.org/standard/54534.html"
 _GDPR_KNOWN_ART = frozenset({"5", "13", "25", "32", "33"})
 
 
-def _norm_key(s: str) -> str:
-    return re.sub(r"\s+", " ", s.strip())
+def _norm_key(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip())
 
 
-def _lookup_exact(raw: str) -> str | None:
-    if raw in _ID_TO_URL:
-        return _ID_TO_URL[raw]
-    raw_l = raw.lower()
-    for k, u in _ID_TO_URL.items():
-        if k.lower() == raw_l:
-            return u
+def _lookup_exact(candidate_id: str) -> str | None:
+    if candidate_id in _ID_TO_URL:
+        return _ID_TO_URL[candidate_id]
+    candidate_lower = candidate_id.lower()
+    for map_id, canonical_url in _ID_TO_URL.items():
+        if map_id.lower() == candidate_lower:
+            return canonical_url
     return None
 
 
 def _guess_url_for_id(id_str: str) -> str | None:
     if not id_str:
         return None
-    raw = _norm_key(id_str)
-    hit = _lookup_exact(raw)
-    if hit:
-        return hit
+    normalized = _norm_key(id_str)
+    exact_url = _lookup_exact(normalized)
+    if exact_url:
+        return exact_url
 
-    m = re.match(r"OWASP\s*A(0[1-9]|10)\s*:\s*2021", raw, re.IGNORECASE)
-    if m:
-        return _ID_TO_URL.get(f"OWASP-A{m.group(1)}")
+    owasp_colon_match = re.match(
+        r"OWASP\s*A(0[1-9]|10)\s*:\s*2021", normalized, re.IGNORECASE
+    )
+    if owasp_colon_match:
+        return _ID_TO_URL.get(f"OWASP-A{owasp_colon_match.group(1)}")
 
-    m2 = re.search(r"OWASP-?\s*A(0[1-9]|10)\b", raw, re.IGNORECASE)
-    if m2:
-        return _ID_TO_URL.get(f"OWASP-A{m2.group(1)}")
+    owasp_short_match = re.search(
+        r"OWASP-?\s*A(0[1-9]|10)\b", normalized, re.IGNORECASE
+    )
+    if owasp_short_match:
+        return _ID_TO_URL.get(f"OWASP-A{owasp_short_match.group(1)}")
 
-    if "gdpr" in raw.lower():
-        m3 = re.search(r"Art\.?\s*(\d+)", raw, re.IGNORECASE)
-        if m3 and m3.group(1) in _GDPR_KNOWN_ART:
-            return f"https://gdpr-info.eu/art-{m3.group(1)}-gdpr/"
+    if "gdpr" in normalized.lower():
+        gdpr_article_match = re.search(r"Art\.?\s*(\d+)", normalized, re.IGNORECASE)
+        if gdpr_article_match and gdpr_article_match.group(1) in _GDPR_KNOWN_ART:
+            article_num = gdpr_article_match.group(1)
+            return f"https://gdpr-info.eu/art-{article_num}-gdpr/"
 
-    if "ccpa" in raw.lower():
-        if "1798.100" in raw or "1798-100" in raw:
+    if "ccpa" in normalized.lower():
+        if "1798.100" in normalized or "1798-100" in normalized:
             return _ID_TO_URL.get("CCPA-§1798.100")
-        if "1798.150" in raw or "1798-150" in raw:
+        if "1798.150" in normalized or "1798-150" in normalized:
             return _ID_TO_URL.get("CCPA-§1798.150")
 
-    m4 = re.search(r"800-53[:\s]+([A-Z]{1,3})-?\s*(\d+)", raw, re.IGNORECASE)
-    if m4:
-        fam, num = m4.group(1).upper(), m4.group(2)
-        ctrl = f"{fam}-{num}"
+    nist_800_53_match = re.search(
+        r"800-53[:\s]+([A-Z]{1,3})-?\s*(\d+)", normalized, re.IGNORECASE
+    )
+    if nist_800_53_match:
+        family = nist_800_53_match.group(1).upper()
+        number = nist_800_53_match.group(2)
+        control_id = f"{family}-{number}"
         return (
             f"https://csrc.nist.gov/projects/risk-management/sp800-53-controls/"
-            f"release-search#!/control?version=5.1&number={ctrl}"
+            f"release-search#!/control?version=5.1&number={control_id}"
         )
 
-    if re.search(r"SOC\s*2|Trust Services", raw, re.IGNORECASE) and re.search(
-        r"CC\s*[67]\.\d", raw, re.IGNORECASE
+    if re.search(r"SOC\s*2|Trust Services", normalized, re.IGNORECASE) and re.search(
+        r"CC\s*[67]\.\d", normalized, re.IGNORECASE
     ):
         return _TSC_PDF
 
@@ -107,40 +115,40 @@ def _guess_url_for_id(id_str: str) -> str | None:
 def coerce_compliance_item(ref: Any) -> dict | None:
     """Turn strings or partial dicts into a plain dict ``{id, summary, url}``."""
     if isinstance(ref, str):
-        s = _norm_key(ref)
-        if not s:
+        normalized_id = _norm_key(ref)
+        if not normalized_id:
             return None
         return {
-            "id": s,
+            "id": normalized_id,
             "summary": "",
-            "url": _guess_url_for_id(s),
+            "url": _guess_url_for_id(normalized_id),
         }
     if isinstance(ref, dict):
-        rid = ref.get("id")
-        if not rid:
+        raw_id = ref.get("id")
+        if not raw_id:
             return None
-        u = ref.get("url")
-        u = u if isinstance(u, str) and u.strip() else None
-        out = {
-            "id": _norm_key(str(rid)),
+        url_value = ref.get("url")
+        url_value = url_value if isinstance(url_value, str) and url_value.strip() else None
+        item: dict[str, Any] = {
+            "id": _norm_key(str(raw_id)),
             "summary": str(ref.get("summary") or "").strip(),
-            "url": u,
+            "url": url_value,
         }
-        if not out["url"]:
-            out["url"] = _guess_url_for_id(out["id"])
-        return out
+        if not item["url"]:
+            item["url"] = _guess_url_for_id(item["id"])
+        return item
     return None
 
 
 def enrich_compliance_list(items: list[Any]) -> list[dict]:
-    out: list[dict] = []
-    seen: set[str] = set()
-    for ref in items:
-        d = coerce_compliance_item(ref)
-        if not d:
+    normalized_items: list[dict] = []
+    seen_ids: set[str] = set()
+    for raw_item in items:
+        compliance_item = coerce_compliance_item(raw_item)
+        if not compliance_item:
             continue
-        if d["id"] in seen:
+        if compliance_item["id"] in seen_ids:
             continue
-        seen.add(d["id"])
-        out.append(d)
-    return out
+        seen_ids.add(compliance_item["id"])
+        normalized_items.append(compliance_item)
+    return normalized_items

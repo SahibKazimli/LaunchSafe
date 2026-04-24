@@ -7,6 +7,8 @@ only sources tied to recorded findings, so Phase 2 can patch real code.
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Any
 
 from agents.prompts.fix_prompts import (
@@ -16,6 +18,7 @@ from agents.prompts.fix_prompts import (
     format_fix_excerpt_large_window,
     format_fix_excerpt_narrow_cited,
 )
+from agents.schemas import coerce_highlight_line_ranges
 
 
 def _finding_narrative_blob(finding: dict) -> str:
@@ -110,26 +113,27 @@ def resolve_path_to_canonical_key(path_hint: str, files: dict[str, str]) -> str:
     hint = normalize_path_hint(path_hint)
     if not hint or not files:
         return ""
-    key, content = find_file_content(hint, files)
-    if content:
-        return key
+    file_key, file_content = find_file_content(hint, files)
+    if file_content:
+        return file_key
     base = hint.split("/")[-1].lower()
     if not base:
         return ""
     matches = [
-        fk
-        for fk in files
-        if fk.lower() == base or fk.lower().endswith("/" + base)
+        candidate_key
+        for candidate_key in files
+        if candidate_key.lower() == base
+        or candidate_key.lower().endswith("/" + base)
     ]
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
         hint_lower = (path_hint or "").lower().replace("\\", "/")
-        for fk in sorted(matches, key=lambda x: -len(x)):
-            if fk.lower() in hint_lower:
-                return fk
+        for candidate_key in sorted(matches, key=lambda path: -len(path)):
+            if candidate_key.lower() in hint_lower:
+                return candidate_key
         # Deterministic fallback: prefer longest path (usually more specific)
-        return sorted(matches, key=lambda x: -len(x))[0]
+        return sorted(matches, key=lambda path: -len(path))[0]
     return ""
 
 
@@ -141,14 +145,16 @@ def resolve_paths_for_findings(
     out: list[str] = []
     seen: set[str] = set()
     for finding in findings:
-        key = resolve_path_to_canonical_key(finding.get("location", ""), files)
-        if key and key not in seen:
-            out.append(key)
-            seen.add(key)
-    for key in infer_paths_from_finding_text(findings, files):
-        if key not in seen:
-            out.append(key)
-            seen.add(key)
+        resolved_file_key = resolve_path_to_canonical_key(
+            finding.get("location", ""), files
+        )
+        if resolved_file_key and resolved_file_key not in seen:
+            out.append(resolved_file_key)
+            seen.add(resolved_file_key)
+    for inferred_file_key in infer_paths_from_finding_text(findings, files):
+        if inferred_file_key not in seen:
+            out.append(inferred_file_key)
+            seen.add(inferred_file_key)
     return out
 
 
@@ -170,24 +176,323 @@ def build_finding_file_bundle(
         ):
             if not hint or not isinstance(hint, str):
                 continue
-            key = resolve_path_to_canonical_key(hint, all_files)
-            if key and key in all_files:
-                out[key] = all_files[key]
-        for key in infer_paths_from_finding_text([finding], all_files, max_paths=8):
-            if key in all_files:
-                out[key] = all_files[key]
+            resolved_file_key = resolve_path_to_canonical_key(hint, all_files)
+            if resolved_file_key and resolved_file_key in all_files:
+                out[resolved_file_key] = all_files[resolved_file_key]
+        for inferred_file_key in infer_paths_from_finding_text(
+            [finding], all_files, max_paths=8
+        ):
+            if inferred_file_key in all_files:
+                out[inferred_file_key] = all_files[inferred_file_key]
     return out
 
 
 def parse_line_number_from_location(location: str) -> int | None:
-    """Return 1-based line number from ``path:42``-style locations, if present."""
+    """Return 1-based line from ``...path:12`` or ``...path:10-20`` (range: first line)."""
     loc = (location or "").strip().replace("\\", "/")
-    if ":" not in loc:
+    if not loc:
         return None
-    _base, _sep, last = loc.rpartition(":")
-    if last.isdigit():
-        return int(last)
+    m = re.search(r":(\d+)-(\d+)\s*$", loc)
+    if m:
+        return int(m.group(1))
+    m = re.search(r":(\d+)\s*$", loc)
+    if m:
+        return int(m.group(1))
     return None
+
+
+def _coerce_positive_int(raw_value: Any) -> int | None:
+    if raw_value is None or raw_value is False:
+        return None
+    try:
+        parsed_int = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    return parsed_int if parsed_int >= 1 else None
+
+
+def _is_weak_anchor_line(line_text: str) -> bool:
+    """True only for punctuation/whitespace-only lines (e.g. a lone `)` or `,`).
+
+    If any letter or digit appears, the model chose a real line, do not nudge, so the
+    highlight matches `location:line` even when that line is wrong (that is a model issue).
+    """
+    t = line_text.rstrip("\n").split("#", 1)[0].strip()
+    if not t:
+        return True
+    if re.search(r"[0-9A-Za-z]", t):
+        return False
+    return True
+
+
+def _nudge_cited_off_weak_anchor(
+    raw_lines: list[str],
+    cited: int,
+    *,
+    max_up: int = 3,
+) -> int:
+    """Nudge at most a few lines up, only from delimiter-only rows."""
+    n = len(raw_lines)
+    c = min(max(1, cited), n)
+    up = 0
+    while up < max_up and c > 1 and _is_weak_anchor_line(raw_lines[c - 1]):
+        c -= 1
+        up += 1
+    return c
+
+
+_EXT_TO_HLJS_LANG: dict[str, str] = {
+    ".py": "python",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".json": "json",
+    ".md": "markdown",
+    ".yml": "yaml",
+    ".yaml": "yaml",
+    ".tf": "hcl",
+    ".tfvars": "hcl",
+    ".hcl": "hcl",
+    ".go": "go",
+    ".rs": "rust",
+    ".java": "java",
+    ".kt": "kotlin",
+    ".kts": "kotlin",
+    ".rb": "ruby",
+    ".php": "php",
+    ".cs": "csharp",
+    ".swift": "swift",
+    ".sql": "sql",
+    ".sh": "bash",
+    ".bash": "bash",
+    ".zsh": "bash",
+    ".dockerfile": "dockerfile",
+    "dockerfile": "dockerfile",
+    ".xml": "xml",
+    ".html": "xml",
+    ".css": "css",
+    ".scss": "scss",
+    ".less": "less",
+    ".vue": "html",
+    ".svelte": "html",
+    ".toml": "ini",
+    ".ini": "ini",
+    ".cfg": "ini",
+    ".c": "c",
+    ".h": "c",
+    ".cpp": "cpp",
+    ".cc": "cpp",
+    ".hpp": "cpp",
+}
+
+
+def _line_set_to_contiguous_runs(line_set: set[int]) -> list[tuple[int, int]]:
+    if not line_set:
+        return []
+    sorted_line_numbers = sorted(line_set)
+    runs: list[tuple[int, int]] = []
+    run_start = sorted_line_numbers[0]
+    run_end = sorted_line_numbers[0]
+    for line_number in sorted_line_numbers[1:]:
+        if line_number == run_end + 1:
+            run_end = line_number
+        else:
+            runs.append((run_start, run_end))
+            run_start = run_end = line_number
+    runs.append((run_start, run_end))
+    return runs
+
+
+def _clamp_ranges_in_file(
+    ranges: list[tuple[int, int]], line_count: int
+) -> list[tuple[int, int]]:
+    if not line_count:
+        return []
+    clamped: list[tuple[int, int]] = []
+    for range_start, range_end in ranges:
+        start_line, end_line = min(range_start, range_end), max(range_start, range_end)
+        start_line = min(max(1, start_line), line_count)
+        end_line = min(max(1, end_line), line_count)
+        if start_line > end_line:
+            start_line, end_line = end_line, start_line
+        clamped.append((start_line, end_line))
+    return clamped
+
+
+def _file_lines_from_ranges(
+    ranges: list[tuple[int, int]], line_count: int
+) -> set[int]:
+    line_numbers: set[int] = set()
+    for range_start, range_end in _clamp_ranges_in_file(ranges, line_count):
+        line_numbers.update(range(range_start, range_end + 1))
+    return line_numbers
+
+
+def _snippet_line_window(
+    line_count: int,
+    cover_lo: int,
+    cover_hi: int,
+    cited: int,
+    *,
+    line_margin: int,
+    max_window_lines: int,
+) -> tuple[int, int]:
+    half = min(line_margin, max_window_lines // 2)
+    span_lo, span_hi = min(cover_lo, cover_hi), max(cover_lo, cover_hi)
+    window_start = max(1, span_lo - half)
+    window_end = min(line_count, span_hi + half)
+    if window_end - window_start + 1 > max_window_lines:
+        window_start = max(1, cited - (max_window_lines // 2))
+        window_end = min(line_count, window_start + max_window_lines - 1)
+        if window_end - window_start + 1 < max_window_lines and window_start > 1:
+            window_start = max(1, window_end - max_window_lines + 1)
+    if not (window_start <= cited <= window_end):
+        span = min(max_window_lines, line_count)
+        window_start = max(1, cited - span // 2)
+        window_end = min(line_count, window_start + span - 1)
+        if window_end - window_start + 1 < span and window_start > 1:
+            window_start = max(1, window_end - span + 1)
+    if cited < window_start:
+        window_start = max(1, cited)
+    if cited > window_end:
+        window_end = min(line_count, cited)
+    if window_end < window_start:
+        window_start = window_end = cited
+    return window_start, window_end
+
+
+def infer_code_language_from_path(file_key: str) -> str:
+    """Map file path to a highlight.js / Prism style language id for the report UI."""
+    name = (file_key or "").split("/")[-1].lower()
+    if not name or "." not in name:
+        if name == "dockerfile":
+            return "dockerfile"
+        return "plaintext"
+    suf = Path(name).suffix.lower()
+    if not suf and name:
+        if name == "dockerfile":
+            return "dockerfile"
+        return "plaintext"
+    return _EXT_TO_HLJS_LANG.get(suf, "plaintext")
+
+
+def enrich_finding_code_context(
+    finding: dict[str, Any],
+    all_files: dict[str, str],
+    *,
+    line_margin: int = 50,
+    max_window_lines: int = 200,
+) -> dict[str, Any]:
+    """Attach a wide source excerpt + line metadata for the report code modal.
+
+    Only populates when ``location`` resolves to a file and a 1-based line number.
+    """
+    enriched: dict[str, Any] = dict(finding)
+    if not all_files or not isinstance(finding, dict):
+        return enriched
+
+    canonical_file_key = resolve_path_to_canonical_key(
+        finding.get("location", ""), all_files
+    )
+    if not canonical_file_key or canonical_file_key not in all_files:
+        return enriched
+
+    loc = str(finding.get("location", "") or "")
+    line_from_loc = parse_line_number_from_location(loc)
+    line_from_field = _coerce_positive_int(
+        finding.get("line_start")
+    ) or _coerce_positive_int(finding.get("line_end"))
+    # Always prefer the line embedded in `location` (`path:line`). It is a single
+    # citation; optional `line_start` from structured output often drifts and
+    # would override with a different number, centering the wrong code in the modal.
+    if line_from_loc is not None:
+        line = line_from_loc
+    else:
+        line = line_from_field
+    if line is None:
+        return enriched
+
+    file_text = all_files[canonical_file_key]
+    raw_lines = file_text.splitlines(keepends=True)
+    line_count = len(raw_lines)
+    if line_count == 0:
+        return enriched
+
+    cited = min(max(1, line), line_count)
+    cited = _nudge_cited_off_weak_anchor(raw_lines, cited)
+
+    raw_ranges = coerce_highlight_line_ranges(finding.get("highlight_line_ranges"))
+    model_ranges = _clamp_ranges_in_file(list(raw_ranges or []), line_count)
+    highlight_file_lines: set[int] = set()
+    if model_ranges:
+        highlight_file_lines = _file_lines_from_ranges(model_ranges, line_count)
+    if not highlight_file_lines:
+        for file_line in (cited - 1, cited, cited + 1):
+            if 1 <= file_line <= line_count:
+                highlight_file_lines.add(file_line)
+    if not highlight_file_lines:
+        highlight_file_lines.add(cited)
+    highlight_file_lines.add(cited)
+
+    min_highlight_line = min(highlight_file_lines)
+    max_highlight_line = max(highlight_file_lines)
+    cover_lo = min(min_highlight_line, cited)
+    cover_hi = max(max_highlight_line, cited)
+    window_start, window_end = _snippet_line_window(
+        line_count,
+        cover_lo,
+        cover_hi,
+        cited,
+        line_margin=line_margin,
+        max_window_lines=max_window_lines,
+    )
+    lines_visible_in_excerpt = {
+        line for line in highlight_file_lines if window_start <= line <= window_end
+    }
+    if not lines_visible_in_excerpt and window_start <= cited <= window_end:
+        lines_visible_in_excerpt.add(cited)
+    if not lines_visible_in_excerpt:
+        lines_visible_in_excerpt = (
+            {cited} if window_start <= cited <= window_end else set()
+        )
+
+    snippet_relative_line_indices = sorted(
+        {line - window_start + 1 for line in lines_visible_in_excerpt}
+    )
+    if not snippet_relative_line_indices and window_start <= cited <= window_end:
+        snippet_relative_line_indices = [cited - window_start + 1]
+
+    snippet = "".join(raw_lines[window_start - 1 : window_end])
+    enriched["file_path"] = canonical_file_key
+    enriched["line_start"] = min_highlight_line
+    enriched["line_end"] = max_highlight_line
+    enriched["snippet"] = snippet
+    enriched["highlight_lines"] = snippet_relative_line_indices
+    enriched["snippet_start_line"] = window_start
+    enriched["code_language"] = infer_code_language_from_path(canonical_file_key)
+    enriched["highlight_line_ranges"] = [
+        list(run) for run in _line_set_to_contiguous_runs(highlight_file_lines)
+    ]
+    if highlight_file_lines - lines_visible_in_excerpt:
+        enriched["code_highlight_truncated"] = True
+    return enriched
+
+
+def enrich_findings_code_context(
+    findings: list[dict],
+    all_files: dict[str, str],
+) -> list[dict]:
+    """Enrich every finding with optional code context fields."""
+    if not all_files or not findings:
+        return [dict(finding) for finding in findings] if findings else []
+    return [
+        enrich_finding_code_context(finding, all_files)
+        for finding in findings
+        if isinstance(finding, dict)
+    ]
 
 
 def build_excerpt_for_fix_prompt(
@@ -211,38 +516,50 @@ def build_excerpt_for_fix_prompt(
     in this file, always use the line window (never the whole file) so the
     model focuses on the vulnerable region.
     """
-    lines = content.splitlines(keepends=True)
-    n = len(lines)
-    line_nums: list[int] = []
-    for gf in group_findings:
-        if not isinstance(gf, dict):
+    raw_file_lines = content.splitlines(keepends=True)
+    line_count = len(raw_file_lines)
+    cited_line_numbers: list[int] = []
+    for group_finding in group_findings:
+        if not isinstance(group_finding, dict):
             continue
-        fk = resolve_path_to_canonical_key(gf.get("location", ""), files)
-        if fk != matched_path:
+        canonical_file_key = resolve_path_to_canonical_key(
+            group_finding.get("location", ""), files
+        )
+        if canonical_file_key != matched_path:
             continue
-        ln = parse_line_number_from_location(gf.get("location", ""))
-        if ln is not None and ln >= 1:
-            line_nums.append(ln)
+        location_line = parse_line_number_from_location(
+            group_finding.get("location", "")
+        )
+        if location_line is not None and location_line >= 1:
+            cited_line_numbers.append(location_line)
 
-    if narrow_to_cited_region and line_nums and n > 0:
-        lo = max(1, min(line_nums) - line_margin)
-        hi = min(n, max(line_nums) + line_margin)
-        excerpt = "".join(lines[lo - 1 : hi])
-        return format_fix_excerpt_narrow_cited(matched_path, lo, hi, n, excerpt)
+    if narrow_to_cited_region and cited_line_numbers and line_count > 0:
+        window_start = max(1, min(cited_line_numbers) - line_margin)
+        window_end = min(line_count, max(cited_line_numbers) + line_margin)
+        excerpt_text = "".join(raw_file_lines[window_start - 1 : window_end])
+        return format_fix_excerpt_narrow_cited(
+            matched_path, window_start, window_end, line_count, excerpt_text
+        )
 
     if len(content) <= full_file_max_chars:
-        return format_fix_excerpt_full_file(matched_path, n, len(content), content)
+        return format_fix_excerpt_full_file(
+            matched_path, line_count, len(content), content
+        )
 
-    if line_nums and n > 0:
-        lo = max(1, min(line_nums) - line_margin)
-        hi = min(n, max(line_nums) + line_margin)
-        excerpt = "".join(lines[lo - 1 : hi])
-        return format_fix_excerpt_large_window(matched_path, lo, hi, n, excerpt)
+    if cited_line_numbers and line_count > 0:
+        window_start = max(1, min(cited_line_numbers) - line_margin)
+        window_end = min(line_count, max(cited_line_numbers) + line_margin)
+        excerpt_text = "".join(raw_file_lines[window_start - 1 : window_end])
+        return format_fix_excerpt_large_window(
+            matched_path, window_start, window_end, line_count, excerpt_text
+        )
 
-    excerpt = content[:head_limit]
+    excerpt_text = content[:head_limit]
     if len(content) > head_limit:
-        excerpt += FIX_EXCERPT_TRUNCATED_HEAD_NOTE
-    return format_fix_excerpt_head_only(matched_path, n, len(content), excerpt)
+        excerpt_text += FIX_EXCERPT_TRUNCATED_HEAD_NOTE
+    return format_fix_excerpt_head_only(
+        matched_path, line_count, len(content), excerpt_text
+    )
 
 
 def merge_scan_files_for_fix(fix_session: dict[str, Any], scan: dict[str, Any]) -> dict[str, str]:

@@ -39,6 +39,17 @@ interface Finding {
   cvss_base?: number;
   exposure?: string;
   is_true_positive?: boolean;
+  file_path?: string;
+  line_start?: number;
+  line_end?: number;
+  snippet?: string;
+  highlight_lines?: number[];
+  /** Inclusive 1-based file line ranges; when set, drive highlighting (overrides single-line heuristics). */
+  highlight_line_ranges?: [number, number][];
+  /** True when the excerpt could not show every line in `highlight_line_ranges` / `highlight_lines`. */
+  code_highlight_truncated?: boolean;
+  snippet_start_line?: number;
+  code_language?: string;
 }
 
 interface ScoreRow {
@@ -168,6 +179,195 @@ const SEV_TITLES: Record<string, string> = {
   low:      'lower-risk issue, defense-in-depth, or limited practical exposure',
 };
 
+function parseGitHubRepo(target: string): { owner: string; repo: string } | null {
+  const t = (target || '').trim();
+  const m = t.match(/github\.com[:/]([^/]+)\/([^/?#]+)/i);
+  if (!m) return null;
+  return { owner: m[1], repo: m[2].replace(/\.git$/i, '') };
+}
+
+function buildGitHubBlobUrl(
+  target: string,
+  filePath: string,
+  lineStart: number,
+  lineEnd: number,
+): string | null {
+  const p = parseGitHubRepo(target);
+  if (!p || !filePath) return null;
+  const path = filePath.split('/').map(seg => encodeURIComponent(seg)).join('/');
+  const hash = lineStart === lineEnd ? `L${lineStart}` : `L${lineStart}-L${lineEnd}`;
+  return `https://github.com/${p.owner}/${p.repo}/blob/HEAD/${path}#${hash}`;
+}
+
+let _findings: Finding[] = [];
+let _scanTarget = '';
+let _escHandler: ((e: KeyboardEvent) => void) | null = null;
+
+function splitSnippetLines(snippet: string): string[] {
+  if (!snippet) return [];
+  const parts = snippet.split(/\n/);
+  if (parts.length > 0 && parts[parts.length - 1] === '' && snippet.endsWith('\n')) {
+    parts.pop();
+  }
+  return parts;
+}
+
+function fileLineInHighlightRanges(
+  fileLine: number,
+  lineRanges: [number, number][] | undefined,
+): boolean {
+  if (!lineRanges || !lineRanges.length) return false;
+  for (const lineRange of lineRanges) {
+    if (!Array.isArray(lineRange) || lineRange.length < 2) continue;
+    const rangeStart = Number(lineRange[0]);
+    const rangeEnd = Number(lineRange[1]);
+    if (!Number.isFinite(rangeStart) || !Number.isFinite(rangeEnd)) continue;
+    const inclusiveStart = Math.min(rangeStart, rangeEnd);
+    const inclusiveEnd = Math.max(rangeStart, rangeEnd);
+    if (fileLine >= inclusiveStart && fileLine <= inclusiveEnd) return true;
+  }
+  return false;
+}
+
+function renderCodeLines(
+  snippet: string,
+  startLine: number,
+  highlightLines: number[] | undefined,
+  citedFileLine: number | undefined,
+  fileLineRanges: [number, number][] | undefined,
+): string {
+  const snippetLines = splitSnippetLines(snippet);
+  const lastLineInExcerpt = startLine + Math.max(0, snippetLines.length - 1);
+  const relativeHighlightSet = new Set(
+    highlightLines && highlightLines.length ? highlightLines : [],
+  );
+  const highlightByFileRanges = !!(
+    fileLineRanges && fileLineRanges.length
+  );
+  return snippetLines
+    .map((lineText, lineIndex) => {
+      const fileLine = startLine + lineIndex;
+      const fromRelativeList =
+        !highlightByFileRanges && relativeHighlightSet.has(lineIndex + 1);
+      const fromLineRanges =
+        highlightByFileRanges &&
+        fileLine >= startLine &&
+        fileLine <= lastLineInExcerpt &&
+        fileLineInHighlightRanges(fileLine, fileLineRanges);
+      const fromCitedAlone =
+        !highlightByFileRanges && citedFileLine != null && fileLine === citedFileLine;
+      const isHighlighted = fromLineRanges || fromRelativeList || fromCitedAlone;
+      const rowClass = isHighlighted ? 'code-line code-line--hl' : 'code-line';
+      return `<div class="${rowClass}" data-line="${fileLine}"><span class="ln">${fileLine}</span><span class="src">${escapeHtml(lineText)}</span></div>`;
+    })
+    .join('');
+}
+
+function openCodeModal(index: number): void {
+  const finding = _findings[index];
+  if (!finding || !finding.snippet || !String(finding.snippet).trim()) return;
+
+  const titleEl = document.getElementById('code-modal-title')!;
+  const metaEl = document.getElementById('code-modal-meta')!;
+  const scrollEl = document.getElementById('code-modal-scroll')!;
+  const fixWrap = document.getElementById('code-modal-fix')!;
+  const fixText = document.getElementById('code-modal-fix-text')!;
+  const ghLink = document.getElementById('code-modal-gh') as HTMLAnchorElement;
+  const backdrop = document.getElementById('code-modal-backdrop')!;
+
+  titleEl.textContent = finding.title;
+  const sev = normalizeSeverity(finding.severity);
+  const fileLabel = finding.file_path || finding.location || '—';
+  const lineStartLabel = finding.line_start ?? '—';
+  const lineEndLabel = finding.line_end ?? lineStartLabel;
+  metaEl.innerHTML = `${escapeHtml(sev)} · ${escapeHtml(fileLabel)} · lines ${lineStartLabel}–${lineEndLabel}`;
+
+  if (finding.fix && finding.fix.trim()) {
+    fixWrap.style.display = '';
+    fixText.textContent = finding.fix;
+  } else {
+    fixWrap.style.display = 'none';
+  }
+
+  const snippetStartLine = finding.snippet_start_line ?? 1;
+  const snippetLineCount = splitSnippetLines(finding.snippet).length;
+  const excerptEndLine = snippetStartLine + Math.max(0, snippetLineCount - 1);
+  const primaryCitedFileLine = finding.line_start;
+  const cave = document.getElementById('code-modal-caveat')!;
+  if (
+    primaryCitedFileLine != null &&
+    snippetLineCount > 0 &&
+    (primaryCitedFileLine < snippetStartLine || primaryCitedFileLine > excerptEndLine)
+  ) {
+    cave.textContent = `Cited line ${primaryCitedFileLine} is outside this excerpt (showing ${snippetStartLine}–${excerptEndLine}). Open the full file on GitHub.`;
+    cave.hidden = false;
+    cave.classList.add('is-visible');
+  } else if (finding.code_highlight_truncated) {
+    cave.textContent =
+      `Some related lines are outside this excerpt (showing ${snippetStartLine}–${excerptEndLine}). Open the full file on GitHub for the rest.`;
+    cave.hidden = false;
+    cave.classList.add('is-visible');
+  } else {
+    cave.textContent = '';
+    cave.hidden = true;
+    cave.classList.remove('is-visible');
+  }
+  const highlightFileLineRanges = Array.isArray(finding.highlight_line_ranges)
+    ? finding.highlight_line_ranges
+    : undefined;
+  scrollEl.innerHTML = renderCodeLines(
+    finding.snippet,
+    snippetStartLine,
+    finding.highlight_lines,
+    typeof finding.line_start === 'number' ? finding.line_start : undefined,
+    highlightFileLineRanges,
+  );
+
+  const url =
+    finding.file_path && finding.line_start != null && finding.line_end != null
+      ? buildGitHubBlobUrl(_scanTarget, finding.file_path, finding.line_start, finding.line_end)
+      : null;
+  if (url) {
+    ghLink.style.display = '';
+    ghLink.setAttribute('href', url);
+  } else {
+    ghLink.style.display = 'none';
+  }
+
+  backdrop.style.display = 'flex';
+  backdrop.setAttribute('aria-hidden', 'false');
+
+  if (_escHandler) {
+    window.removeEventListener('keydown', _escHandler);
+  }
+  _escHandler = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') closeCodeModal();
+  };
+  window.addEventListener('keydown', _escHandler);
+
+  requestAnimationFrame(() => {
+    const firstHighlightedRow = scrollEl.querySelector('.code-line--hl') as HTMLElement | null;
+    (firstHighlightedRow || scrollEl.firstElementChild)?.scrollIntoView({
+      block: 'center',
+      behavior: 'auto',
+    });
+  });
+}
+
+function closeCodeModal(): void {
+  const backdrop = document.getElementById('code-modal-backdrop')!;
+  backdrop.style.display = 'none';
+  backdrop.setAttribute('aria-hidden', 'true');
+  if (_escHandler) {
+    window.removeEventListener('keydown', _escHandler);
+    _escHandler = null;
+  }
+}
+
+function countSnippetFindings(list: Finding[]): number {
+  return list.filter(f => f.snippet && String(f.snippet).trim()).length;
+}
+
 function renderComplianceTag(tag: string | { id?: string; summary?: string; url?: string }): string {
   if (typeof tag === 'string') {
     return `<span class="comp-tag">${escapeHtml(tag)}</span>`;
@@ -183,7 +383,7 @@ function renderComplianceTag(tag: string | { id?: string; summary?: string; url?
   return `<span class="comp-tag">${tid}</span>`;
 }
 
-function renderFindingItem(f: Finding, scoreRow: ScoreRow): string {
+function renderFindingItem(f: Finding, scoreRow: ScoreRow, index: number, scanTarget: string): string {
   const sev = normalizeSeverity(f.severity);
 
   let scoreMeta = '';
@@ -198,12 +398,33 @@ function renderFindingItem(f: Finding, scoreRow: ScoreRow): string {
     complianceTags = `<div class="compliance-tags">${f.compliance.map(renderComplianceTag).join('')}</div>`;
   }
 
-  return `<div class="finding-item" data-sev="${sev}" onclick="this.classList.toggle('expanded')">
+  const hasSnippet = !!(f.snippet && String(f.snippet).trim());
+  const ghUrl =
+    hasSnippet && f.file_path != null && f.line_start != null && f.line_end != null
+      ? buildGitHubBlobUrl(scanTarget, f.file_path, f.line_start, f.line_end)
+      : null;
+  const actions: string[] = [];
+  if (hasSnippet) {
+    actions.push(
+      `<button type="button" class="view-code-btn" onclick="event.stopPropagation(); openCodeModal(${index})">View code</button>`,
+    );
+  }
+  if (ghUrl) {
+    actions.push(
+      `<a class="gh-file-link" href="${escapeHtml(ghUrl)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">View full file on GitHub</a>`,
+    );
+  }
+  const actionsBlock = actions.length
+    ? `<div class="finding-actions">${actions.join('')}</div>`
+    : '';
+
+  return `<div class="finding-item" data-sev="${sev}" data-finding-index="${index}" onclick="this.classList.toggle('expanded')">
     <div class="finding-top">
       <span class="sev-badge sev-${sev}" title="${escapeHtml(SEV_TITLES[sev] || '')}">${sev}</span>
       <span class="finding-title">${escapeHtml(f.title)}</span>
     </div>
     <div class="finding-location">${escapeHtml(f.location)}</div>
+    ${actionsBlock}
     ${scoreMeta}
     <div class="finding-desc">${escapeHtml(f.description)}</div>
     ${complianceTags}
@@ -330,6 +551,8 @@ async function startFixMode() {
 const _w = window as any;
 _w.filter = filter;
 _w.startFixMode = startFixMode;
+_w.openCodeModal = openCodeModal;
+_w.closeCodeModal = closeCodeModal;
 
 // ---------------------------------------------------------------------------
 // Page init — fetch data and render
@@ -355,6 +578,9 @@ async function init() {
     const target: string = statusData.target || '';
     const total = findings.length;
 
+    _findings = findings;
+    _scanTarget = target;
+
     const counts = {
       critical: findings.filter(f => normalizeSeverity(f.severity) === 'critical').length,
       high:     findings.filter(f => normalizeSeverity(f.severity) === 'high').length,
@@ -371,6 +597,15 @@ async function init() {
     document.getElementById('report-target')!.textContent =
       `Target: ${target} \u00b7 `;
     document.getElementById('report-count')!.textContent = `${total} findings`;
+    const snippetN = countSnippetFindings(findings);
+    const badge = document.getElementById('snippet-count-badge')!;
+    if (snippetN > 0) {
+      badge.style.display = 'inline-block';
+      badge.textContent = `${snippetN} issue${snippetN === 1 ? '' : 's'} with snippets`;
+    } else {
+      badge.style.display = 'none';
+      badge.textContent = '';
+    }
     document.getElementById('json-export-link')!.setAttribute('href', `/api/findings/${SCAN_ID}`);
 
     // Render filter buttons with counts
@@ -386,7 +621,9 @@ async function init() {
     if (findings.length === 0) {
       list.innerHTML = '<div class="empty-state"><strong>Clean!</strong>No findings detected in this scan.</div>';
     } else {
-      list.innerHTML = findings.map((f, i) => renderFindingItem(f, breakdown.rows[i])).join('');
+      list.innerHTML = findings
+        .map((f, i) => renderFindingItem(f, breakdown.rows[i], i, target))
+        .join('');
     }
 
     // Hide loading, show report
@@ -395,6 +632,15 @@ async function init() {
   } catch (_err) {
     loadingEl.textContent = 'Failed to load report data.';
   }
+}
+
+const _bd = document.getElementById('code-modal-backdrop');
+if (_bd) {
+  _bd.addEventListener('click', closeCodeModal);
+  document.getElementById('code-modal-close')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeCodeModal();
+  });
 }
 
 init();

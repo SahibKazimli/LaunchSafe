@@ -25,7 +25,7 @@ from agents.prompts.executive_summary import (
 )
 from .compliance_enrichment import coerce_compliance_item, enrich_compliance_list
 from .runtime_log import emit
-from .schemas import AuditReport, ComplianceRef, Finding
+from .schemas import AuditReport, ComplianceRef, Finding, coerce_highlight_line_ranges
 from tools.scanners import SEVERITY_DEFAULT_CVSS, infer_exposure_from_path
 
 SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -58,80 +58,93 @@ def _normalize_loc(loc: str) -> str:
 def _dedupe(findings: list[dict]) -> list[Finding]:
     """Group by (lowercased title, file path). Keep the most severe copy
     and union its compliance refs."""
-    by_key: dict[tuple[str, str], dict] = {}
+    findings_by_title_and_path: dict[tuple[str, str], dict] = {}
 
-    for raw in findings:
-        if not isinstance(raw, dict):
+    for raw_finding in findings:
+        if not isinstance(raw_finding, dict):
             continue
-        if "_error" in raw:
+        if "_error" in raw_finding:
             continue
-        title = (raw.get("title") or "").strip().lower()
-        loc = _normalize_loc(raw.get("location", ""))
+        title = (raw_finding.get("title") or "").strip().lower()
+        file_path_key = _normalize_loc(raw_finding.get("location", ""))
         if not title:
             continue
-        key = (title, loc)
+        title_path_key = (title, file_path_key)
 
-        winner = by_key.get(key)
-        if winner is None or _sev_key(raw.get("severity")) < _sev_key(winner.get("severity")):
-            keep = dict(raw)
+        existing_winner = findings_by_title_and_path.get(title_path_key)
+        if existing_winner is None or _sev_key(raw_finding.get("severity")) < _sev_key(
+            existing_winner.get("severity")
+        ):
+            merged_finding = dict(raw_finding)
         else:
-            keep = dict(winner)
+            merged_finding = dict(existing_winner)
 
-        by_cid: dict[str, dict] = {}
-        for ref in (raw.get("compliance") or []) + ((winner or {}).get("compliance") or []):
-            d = coerce_compliance_item(ref)
-            if not d or not d["id"]:
+        by_compliance_id: dict[str, dict] = {}
+        for ref in (raw_finding.get("compliance") or []) + (
+            (existing_winner or {}).get("compliance") or []
+        ):
+            compliance_item = coerce_compliance_item(ref)
+            if not compliance_item or not compliance_item["id"]:
                 continue
-            cid = d["id"]
-            if cid not in by_cid:
-                by_cid[cid] = d
+            compliance_id = compliance_item["id"]
+            if compliance_id not in by_compliance_id:
+                by_compliance_id[compliance_id] = compliance_item
                 continue
-            cur = by_cid[cid]
-            if (d.get("url")) and (not cur.get("url")):
-                cur["url"] = d["url"]
-            if len((d.get("summary") or "")) > len((cur.get("summary") or "")):
-                cur["summary"] = d["summary"]
-        keep["compliance"] = list(by_cid.values())
+            previous = by_compliance_id[compliance_id]
+            if (compliance_item.get("url")) and (not previous.get("url")):
+                previous["url"] = compliance_item["url"]
+            if len((compliance_item.get("summary") or "")) > len(
+                (previous.get("summary") or "")
+            ):
+                previous["summary"] = compliance_item["summary"]
+        merged_finding["compliance"] = list(by_compliance_id.values())
 
-        by_key[key] = keep
+        findings_by_title_and_path[title_path_key] = merged_finding
 
-    out: list[Finding] = []
-    for raw in by_key.values():
-        raw.pop("_branch", None)
+    deduped_findings: list[Finding] = []
+    for raw_finding in findings_by_title_and_path.values():
+        raw_finding.pop("_branch", None)
         refs: list[ComplianceRef] = []
-        for d in enrich_compliance_list(raw.get("compliance") or []):
+        for compliance_item in enrich_compliance_list(raw_finding.get("compliance") or []):
             try:
-                refs.append(ComplianceRef.model_validate(d))
+                refs.append(ComplianceRef.model_validate(compliance_item))
             except Exception:  
                 # Tolerate partial refs; the report UI still shows id + link if present.
                 refs.append(ComplianceRef.model_construct(
-                    id=str(d.get("id")),
-                    summary=str(d.get("summary") or ""),
-                    url=d.get("url"),
+                    id=str(compliance_item.get("id")),
+                    summary=str(compliance_item.get("summary") or ""),
+                    url=compliance_item.get("url"),
                 ))
 
-        backfilled = _backfill_score_fields(raw)
+        backfilled_finding = _backfill_score_fields(raw_finding)
         try:
             finding = Finding.model_validate({
-                "severity": str(backfilled.get("severity", "low")).lower() or "low",
-                "module": backfilled.get("module") or "general",
-                "title": backfilled.get("title") or "(untitled)",
-                "location": backfilled.get("location", ""),
-                "description": backfilled.get("description", ""),
-                "fix": backfilled.get("fix", ""),
-                "priority": max(1, min(5, int(backfilled.get("priority") or 3))),
-                "is_true_positive": bool(backfilled.get("is_true_positive", True)),
-                "rationale": backfilled.get("rationale"),
+                "severity": str(backfilled_finding.get("severity", "low")).lower() or "low",
+                "module": backfilled_finding.get("module") or "general",
+                "title": backfilled_finding.get("title") or "(untitled)",
+                "location": backfilled_finding.get("location", ""),
+                "description": backfilled_finding.get("description", ""),
+                "fix": backfilled_finding.get("fix", ""),
+                "priority": max(1, min(5, int(backfilled_finding.get("priority") or 3))),
+                "is_true_positive": bool(
+                    backfilled_finding.get("is_true_positive", True)
+                ),
+                "rationale": backfilled_finding.get("rationale"),
                 "compliance": refs,
-                "cvss_base": float(backfilled.get("cvss_base") or 0.0),
-                "exposure": backfilled.get("exposure") or "production",
+                "cvss_base": float(backfilled_finding.get("cvss_base") or 0.0),
+                "exposure": backfilled_finding.get("exposure") or "production",
+                "highlight_line_ranges": coerce_highlight_line_ranges(
+                    backfilled_finding.get("highlight_line_ranges")
+                ),
             })
-            out.append(finding)
+            deduped_findings.append(finding)
         except Exception:  
             continue
 
-    out.sort(key=lambda x: (_sev_key(x.severity), x.priority))
-    return out
+    deduped_findings.sort(
+        key=lambda item: (_sev_key(item.severity), item.priority)
+    )
+    return deduped_findings
 
 
 def _branch_breakdown(findings: list[dict]) -> dict[str, int]:

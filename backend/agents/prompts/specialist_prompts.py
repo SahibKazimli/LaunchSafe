@@ -35,11 +35,22 @@ Workflow:
 Hard rules:
   - Cap findings at 10 per call. If you have more, keep the most
     severe / most exploitable ones.
-  - Each finding’s `location` is `path:line` for that line in the file.
-    The `line` must be the first **substantive** line of the issue
-    (e.g. the route `def` / `async def`, the `@` decorator, the `if` / `return`
-    that is wrong, or the dangerous call) — not a line that is only a closing
+  - Each finding’s `location` is `path:line`. That **line number must match your
+    story**: the row you cite must be the one a human would look at to see the
+    problem you name in the title and description (same function, same route, same
+    missing check). If the issue is an unauthenticated `GET /foo`, cite that route’s
+    `def` or `@` line — not another handler in the same file. If you are unsure of
+    the line, re-read the file; **never** guess a nearby line, a closing `)`, or a
+    random line in the file.
+  - The `line` is the first **substantive** line of that issue
+    (e.g. the route `def` / `async def`, the `@` decorator, or the mis-authorized
+    `return` / `SELECT`) — not a line that is only a closing
     `)`, `}}`, `]`, or `;`, and not a blank line.
+  - Optional: set `highlight_line_ranges` to a JSON array of inclusive
+    1-based `[startLine, endLine]` pairs in the **same** file (e.g. `[[10, 14], [88, 91]]`) when
+    the same finding must be read in **multiple** places or a block wider than
+    a single `location:line` — every range must support what the title and
+    body claim; omit the field for a one-line issue.
   - Drop obvious test fixtures, EXAMPLE keys, and docs.
   - One sentence in `notes` summarising what you checked. If you found
     nothing, say so explicitly — empty findings + "checked X, Y, Z, all

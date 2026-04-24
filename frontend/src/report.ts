@@ -39,6 +39,13 @@ interface Finding {
   cvss_base?: number;
   exposure?: string;
   is_true_positive?: boolean;
+  file_path?: string;
+  line_start?: number;
+  line_end?: number;
+  snippet?: string;
+  highlight_lines?: number[];
+  snippet_start_line?: number;
+  code_language?: string;
 }
 
 interface ScoreRow {
@@ -168,6 +175,148 @@ const SEV_TITLES: Record<string, string> = {
   low:      'lower-risk issue, defense-in-depth, or limited practical exposure',
 };
 
+function parseGitHubRepo(target: string): { owner: string; repo: string } | null {
+  const t = (target || '').trim();
+  const m = t.match(/github\.com[:/]([^/]+)\/([^/?#]+)/i);
+  if (!m) return null;
+  return { owner: m[1], repo: m[2].replace(/\.git$/i, '') };
+}
+
+function buildGitHubBlobUrl(
+  target: string,
+  filePath: string,
+  lineStart: number,
+  lineEnd: number,
+): string | null {
+  const p = parseGitHubRepo(target);
+  if (!p || !filePath) return null;
+  const path = filePath.split('/').map(seg => encodeURIComponent(seg)).join('/');
+  const hash = lineStart === lineEnd ? `L${lineStart}` : `L${lineStart}-L${lineEnd}`;
+  return `https://github.com/${p.owner}/${p.repo}/blob/HEAD/${path}#${hash}`;
+}
+
+let _findings: Finding[] = [];
+let _scanTarget = '';
+let _escHandler: ((e: KeyboardEvent) => void) | null = null;
+
+function splitSnippetLines(snippet: string): string[] {
+  if (!snippet) return [];
+  const parts = snippet.split(/\n/);
+  if (parts.length > 0 && parts[parts.length - 1] === '' && snippet.endsWith('\n')) {
+    parts.pop();
+  }
+  return parts;
+}
+
+function renderCodeLines(
+  snippet: string,
+  startLine: number,
+  highlightLines: number[] | undefined,
+  citedFileLine: number | undefined,
+): string {
+  const raw = splitSnippetLines(snippet);
+  const hl = new Set(highlightLines && highlightLines.length ? highlightLines : []);
+  return raw
+    .map((line, j) => {
+      const n = startLine + j;
+      const byIndex = hl.has(j + 1);
+      const byCited = citedFileLine != null && n === citedFileLine;
+      const isHl = byIndex || byCited;
+      const rowCls = isHl ? 'code-line code-line--hl' : 'code-line';
+      return `<div class="${rowCls}" data-line="${n}"><span class="ln">${n}</span><span class="src">${escapeHtml(line)}</span></div>`;
+    })
+    .join('');
+}
+
+function openCodeModal(index: number): void {
+  const f = _findings[index];
+  if (!f || !f.snippet || !String(f.snippet).trim()) return;
+
+  const titleEl = document.getElementById('code-modal-title')!;
+  const metaEl = document.getElementById('code-modal-meta')!;
+  const scrollEl = document.getElementById('code-modal-scroll')!;
+  const fixWrap = document.getElementById('code-modal-fix')!;
+  const fixText = document.getElementById('code-modal-fix-text')!;
+  const ghLink = document.getElementById('code-modal-gh') as HTMLAnchorElement;
+  const backdrop = document.getElementById('code-modal-backdrop')!;
+
+  titleEl.textContent = f.title;
+  const sev = normalizeSeverity(f.severity);
+  const fileLabel = f.file_path || f.location || '—';
+  const ls = f.line_start ?? '—';
+  const le = f.line_end ?? ls;
+  metaEl.innerHTML = `${escapeHtml(sev)} · ${escapeHtml(fileLabel)} · lines ${ls}–${le}`;
+
+  if (f.fix && f.fix.trim()) {
+    fixWrap.style.display = '';
+    fixText.textContent = f.fix;
+  } else {
+    fixWrap.style.display = 'none';
+  }
+
+  const start = f.snippet_start_line ?? 1;
+  const nLines = splitSnippetLines(f.snippet).length;
+  const endLine = start + Math.max(0, nLines - 1);
+  const cited = f.line_start;
+  const cave = document.getElementById('code-modal-caveat')!;
+  if (cited != null && nLines > 0 && (cited < start || cited > endLine)) {
+    cave.textContent = `Cited line ${cited} is outside this excerpt (showing ${start}–${endLine}). Open the full file on GitHub.`;
+    cave.hidden = false;
+    cave.classList.add('is-visible');
+  } else {
+    cave.textContent = '';
+    cave.hidden = true;
+    cave.classList.remove('is-visible');
+  }
+  scrollEl.innerHTML = renderCodeLines(
+    f.snippet,
+    start,
+    f.highlight_lines,
+    typeof f.line_start === 'number' ? f.line_start : undefined,
+  );
+
+  const url =
+    f.file_path && f.line_start != null && f.line_end != null
+      ? buildGitHubBlobUrl(_scanTarget, f.file_path, f.line_start, f.line_end)
+      : null;
+  if (url) {
+    ghLink.style.display = '';
+    ghLink.setAttribute('href', url);
+  } else {
+    ghLink.style.display = 'none';
+  }
+
+  backdrop.style.display = 'flex';
+  backdrop.setAttribute('aria-hidden', 'false');
+
+  if (_escHandler) {
+    window.removeEventListener('keydown', _escHandler);
+  }
+  _escHandler = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') closeCodeModal();
+  };
+  window.addEventListener('keydown', _escHandler);
+
+  requestAnimationFrame(() => {
+    const first = scrollEl.querySelector('.code-line--hl') as HTMLElement | null;
+    (first || scrollEl.firstElementChild)?.scrollIntoView({ block: 'center', behavior: 'auto' });
+  });
+}
+
+function closeCodeModal(): void {
+  const backdrop = document.getElementById('code-modal-backdrop')!;
+  backdrop.style.display = 'none';
+  backdrop.setAttribute('aria-hidden', 'true');
+  if (_escHandler) {
+    window.removeEventListener('keydown', _escHandler);
+    _escHandler = null;
+  }
+}
+
+function countSnippetFindings(list: Finding[]): number {
+  return list.filter(f => f.snippet && String(f.snippet).trim()).length;
+}
+
 function renderComplianceTag(tag: string | { id?: string; summary?: string; url?: string }): string {
   if (typeof tag === 'string') {
     return `<span class="comp-tag">${escapeHtml(tag)}</span>`;
@@ -183,7 +332,7 @@ function renderComplianceTag(tag: string | { id?: string; summary?: string; url?
   return `<span class="comp-tag">${tid}</span>`;
 }
 
-function renderFindingItem(f: Finding, scoreRow: ScoreRow): string {
+function renderFindingItem(f: Finding, scoreRow: ScoreRow, index: number, scanTarget: string): string {
   const sev = normalizeSeverity(f.severity);
 
   let scoreMeta = '';
@@ -198,12 +347,33 @@ function renderFindingItem(f: Finding, scoreRow: ScoreRow): string {
     complianceTags = `<div class="compliance-tags">${f.compliance.map(renderComplianceTag).join('')}</div>`;
   }
 
-  return `<div class="finding-item" data-sev="${sev}" onclick="this.classList.toggle('expanded')">
+  const hasSnippet = !!(f.snippet && String(f.snippet).trim());
+  const ghUrl =
+    hasSnippet && f.file_path != null && f.line_start != null && f.line_end != null
+      ? buildGitHubBlobUrl(scanTarget, f.file_path, f.line_start, f.line_end)
+      : null;
+  const actions: string[] = [];
+  if (hasSnippet) {
+    actions.push(
+      `<button type="button" class="view-code-btn" onclick="event.stopPropagation(); openCodeModal(${index})">View code</button>`,
+    );
+  }
+  if (ghUrl) {
+    actions.push(
+      `<a class="gh-file-link" href="${escapeHtml(ghUrl)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">View full file on GitHub</a>`,
+    );
+  }
+  const actionsBlock = actions.length
+    ? `<div class="finding-actions">${actions.join('')}</div>`
+    : '';
+
+  return `<div class="finding-item" data-sev="${sev}" data-finding-index="${index}" onclick="this.classList.toggle('expanded')">
     <div class="finding-top">
       <span class="sev-badge sev-${sev}" title="${escapeHtml(SEV_TITLES[sev] || '')}">${sev}</span>
       <span class="finding-title">${escapeHtml(f.title)}</span>
     </div>
     <div class="finding-location">${escapeHtml(f.location)}</div>
+    ${actionsBlock}
     ${scoreMeta}
     <div class="finding-desc">${escapeHtml(f.description)}</div>
     ${complianceTags}
@@ -330,6 +500,8 @@ async function startFixMode() {
 const _w = window as any;
 _w.filter = filter;
 _w.startFixMode = startFixMode;
+_w.openCodeModal = openCodeModal;
+_w.closeCodeModal = closeCodeModal;
 
 // ---------------------------------------------------------------------------
 // Page init — fetch data and render
@@ -355,6 +527,9 @@ async function init() {
     const target: string = statusData.target || '';
     const total = findings.length;
 
+    _findings = findings;
+    _scanTarget = target;
+
     const counts = {
       critical: findings.filter(f => normalizeSeverity(f.severity) === 'critical').length,
       high:     findings.filter(f => normalizeSeverity(f.severity) === 'high').length,
@@ -371,6 +546,15 @@ async function init() {
     document.getElementById('report-target')!.textContent =
       `Target: ${target} \u00b7 `;
     document.getElementById('report-count')!.textContent = `${total} findings`;
+    const snippetN = countSnippetFindings(findings);
+    const badge = document.getElementById('snippet-count-badge')!;
+    if (snippetN > 0) {
+      badge.style.display = 'inline-block';
+      badge.textContent = `${snippetN} issue${snippetN === 1 ? '' : 's'} with snippets`;
+    } else {
+      badge.style.display = 'none';
+      badge.textContent = '';
+    }
     document.getElementById('json-export-link')!.setAttribute('href', `/api/findings/${SCAN_ID}`);
 
     // Render filter buttons with counts
@@ -386,7 +570,9 @@ async function init() {
     if (findings.length === 0) {
       list.innerHTML = '<div class="empty-state"><strong>Clean!</strong>No findings detected in this scan.</div>';
     } else {
-      list.innerHTML = findings.map((f, i) => renderFindingItem(f, breakdown.rows[i])).join('');
+      list.innerHTML = findings
+        .map((f, i) => renderFindingItem(f, breakdown.rows[i], i, target))
+        .join('');
     }
 
     // Hide loading, show report
@@ -395,6 +581,15 @@ async function init() {
   } catch (_err) {
     loadingEl.textContent = 'Failed to load report data.';
   }
+}
+
+const _bd = document.getElementById('code-modal-backdrop');
+if (_bd) {
+  _bd.addEventListener('click', closeCodeModal);
+  document.getElementById('code-modal-close')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeCodeModal();
+  });
 }
 
 init();

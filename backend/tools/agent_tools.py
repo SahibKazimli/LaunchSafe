@@ -96,7 +96,10 @@ def list_repo_files(state: Annotated[dict, InjectedState]) -> str:
     size in bytes. Useful to decide which scanners are relevant (e.g. skip
     cloud scan if no .tf files)."""
     files = state.get("files", {})
-    listing = [{"path": p, "bytes": len(c)} for p, c in files.items()]
+    listing = [
+        {"path": file_path, "bytes": len(file_content)}
+        for file_path, file_content in files.items()
+    ]
     return json.dumps({"count": len(listing), "files": listing[:200]}, default=str)
 
 

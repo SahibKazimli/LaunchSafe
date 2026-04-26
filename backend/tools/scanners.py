@@ -91,11 +91,10 @@ SKIP_DIRS = {"node_modules", ".git", "__pycache__", ".venv", "venv",
 
 def is_scannable(path_or_name: str) -> bool:
     """Return True if this file should be ingested for scanning."""
-    from pathlib import Path as _P
-    p = _P(path_or_name)
-    if p.suffix.lower() in EXTENSIONS_TO_SCAN:
+    path = Path(path_or_name)
+    if path.suffix.lower() in EXTENSIONS_TO_SCAN:
         return True
-    if p.name.lower() in FILENAMES_TO_SCAN:
+    if path.name.lower() in FILENAMES_TO_SCAN:
         return True
     return False
 
@@ -103,7 +102,7 @@ def is_scannable(path_or_name: str) -> bool:
 def scan_secrets(files: dict[str, str]) -> list[dict]:
     findings = []
     for path, content in files.items():
-        for lines_i, line in enumerate(content.splitlines(), 1):
+        for line_number, line in enumerate(content.splitlines(), 1):
             for pattern, title, sev in SECRET_PATTERNS:
                 if re.search(pattern, line, re.IGNORECASE):
                     masked = re.sub(pattern, "[REDACTED]", line.strip(), flags=re.IGNORECASE)
@@ -111,8 +110,8 @@ def scan_secrets(files: dict[str, str]) -> list[dict]:
                         "severity": sev,
                         "module": "secrets",
                         "title": f"{title} detected",
-                        "location": f"{path}:{lines_i}",
-                        "description": f"Pattern matched on line {lines_i}: {masked[:120]}",
+                        "location": f"{path}:{line_number}",
+                        "description": f"Pattern matched on line {line_number}: {masked[:120]}",
                         "fix": f"Remove this credential from the codebase immediately. Rotate/revoke the {title.lower()} and store in environment variables.",
                         "compliance": ["SOC2-CC6.1", "ISO27001-A.9"],
                     })
@@ -122,15 +121,15 @@ def scan_secrets(files: dict[str, str]) -> list[dict]:
 def scan_auth(files: dict[str, str]) -> list[dict]:
     findings = []
     for path, content in files.items():
-        for line_i, line in enumerate(content.splitlines(), 1):
+        for line_number, line in enumerate(content.splitlines(), 1):
             for pattern, title, sev, fix in AUTH_PATTERNS:
                 if re.search(pattern, line, re.IGNORECASE):
                     findings.append({
                         "severity": sev,
                         "module": "auth",
                         "title": title,
-                        "location": f"{path}:{line_i}",
-                        "description": f"Found at line {line_i}: {line.strip()[:120]}",
+                        "location": f"{path}:{line_number}",
+                        "description": f"Found at line {line_number}: {line.strip()[:120]}",
                         "fix": fix,
                         "compliance": ["GDPR-Art.32", "SOC2-CC6.1"],
                     })
@@ -139,18 +138,21 @@ def scan_auth(files: dict[str, str]) -> list[dict]:
 
 def scan_cloud(files: dict[str, str]) -> list[dict]:
     findings = []
-    tf_yaml_files = {k: v for k, v in files.items()
-                     if k.endswith((".tf", ".yaml", ".yml", ".json"))}
+    tf_yaml_files = {
+        file_path: file_content
+        for file_path, file_content in files.items()
+        if file_path.endswith((".tf", ".yaml", ".yml", ".json"))
+    }
     for path, content in tf_yaml_files.items():
-        for line_i, line in enumerate(content.splitlines(), 1):
+        for line_number, line in enumerate(content.splitlines(), 1):
             for pattern, title, sev, fix in CLOUD_PATTERNS:
                 if re.search(pattern, line, re.IGNORECASE):
                     findings.append({
                         "severity": sev,
                         "module": "cloud",
                         "title": title,
-                        "location": f"{path}:{line_i}",
-                        "description": f"Found at line {line_i}: {line.strip()[:120]}",
+                        "location": f"{path}:{line_number}",
+                        "description": f"Found at line {line_number}: {line.strip()[:120]}",
                         "fix": fix,
                         "compliance": ["SOC2-CC7.2", "ISO27001-A.12"],
                     })
@@ -183,8 +185,8 @@ def scan_privacy(files: dict[str, str]) -> list[dict]:
                 "fix": "Redact or hash PII before logging. Use a structured logger with field-level redaction.",
                 "compliance": ["GDPR-Art.5", "SOC2-CC7.2"],
             })
-    if not any(f["module"] == "privacy" for f in findings):
-        has_privacy_policy = any("privacy" in k.lower() for k in files)
+    if not any(finding["module"] == "privacy" for finding in findings):
+        has_privacy_policy = any("privacy" in file_path.lower() for file_path in files)
         if not has_privacy_policy:
             findings.append({
                 "severity": "low",
@@ -213,12 +215,12 @@ def scan_dependencies(files: dict[str, str]) -> list[dict]:
     for path, content in files.items():
         fname = Path(path).name
         if fname in ("package.json", "requirements.txt", "Pipfile", "pyproject.toml"):
-            for pkg, (vuln_ver, desc, sev, fix) in known_vulns.items():
-                if pkg.lower() in content.lower():
+            for package_name, (vuln_ver, desc, sev, fix) in known_vulns.items():
+                if package_name.lower() in content.lower():
                     findings.append({
                         "severity": sev,
                         "module": "deps",
-                        "title": f"Vulnerable dependency: {pkg}",
+                        "title": f"Vulnerable dependency: {package_name}",
                         "location": path,
                         "description": desc,
                         "fix": fix,
@@ -304,17 +306,17 @@ def scan_api(files: dict[str, str]) -> list[dict]:
 # are now imported from agents.config
 
 
-def _normalize_severity(s: object) -> str:
-    return str(s or "low").strip().lower()
+def _normalize_severity(severity_raw: object) -> str:
+    return str(severity_raw or "low").strip().lower()
 
 
 def _cvss_for(finding: dict) -> float:
     """Return the CVSS base score for a finding, with sane fallbacks."""
     raw = finding.get("cvss_base")
     try:
-        v = float(raw)
-        if 0.0 < v <= 10.0:
-            return v
+        cvss_value = float(raw)
+        if 0.0 < cvss_value <= 10.0:
+            return cvss_value
     except (TypeError, ValueError):
         pass
     return SEVERITY_DEFAULT_CVSS.get(_normalize_severity(finding.get("severity")), 0.0)
@@ -323,10 +325,10 @@ def _cvss_for(finding: dict) -> float:
 def infer_exposure_from_path(location: str) -> str:
     """Conservative path-based inference for `exposure`. Anything ambiguous
     stays 'production' (worst case for the score)."""
-    p = (location or "").lower().replace("\\", "/")
-    if not p:
+    normalized_path = (location or "").lower().replace("\\", "/")
+    if not normalized_path:
         return "production"
-    parts = p.split("/")
+    parts = normalized_path.split("/")
     name = parts[-1] if parts else ""
 
     if any(seg in parts for seg in ("tests", "test", "__tests__", "spec", "specs", "fixtures")):
@@ -361,12 +363,12 @@ def score_finding(finding: dict) -> dict:
     plus the contribution so the UI can show its math row-by-row."""
     cvss = _cvss_for(finding)
     exposure = _exposure_for(finding)
-    mult = EXPOSURE_MULTIPLIER[exposure]
-    contribution = round(cvss * mult, 2)
+    exposure_multiplier = EXPOSURE_MULTIPLIER[exposure]
+    contribution = round(cvss * exposure_multiplier, 2)
     return {
         "cvss_base": cvss,
         "exposure": exposure,
-        "exposure_multiplier": mult,
+        "exposure_multiplier": exposure_multiplier,
         "contribution": contribution,
         "counted": bool(finding.get("is_true_positive", True)),
     }
@@ -375,18 +377,18 @@ def score_finding(finding: dict) -> dict:
 def compute_score(findings: list[dict]) -> tuple[int, str]:
     """Headline (score, grade). See module-level docstring for the math."""
     risk_total = 0.0
-    for f in findings:
-        if not f.get("is_true_positive", True):
+    for finding in findings:
+        if not finding.get("is_true_positive", True):
             continue
-        s = score_finding(f)
-        risk_total += s["contribution"]
+        score_row = score_finding(finding)
+        risk_total += score_row["contribution"]
 
     score = max(0, min(100, round(100 - 2.0 * risk_total)))
 
     grade = "F"
-    for g, threshold in GRADE_THRESHOLDS:
-        if risk_total <= threshold:
-            grade = g
+    for grade_letter, risk_threshold in GRADE_THRESHOLDS:
+        if risk_total <= risk_threshold:
+            grade = grade_letter
             break
     return score, grade
 
@@ -397,13 +399,15 @@ def score_breakdown(findings: list[dict]) -> dict:
     risk_total = 0.0
     counted = 0
     skipped_low_confidence = 0
-    by_exposure: dict[str, int] = {k: 0 for k in EXPOSURE_MULTIPLIER}
-    for f in findings:
-        s = score_finding(f)
-        rows.append(s)
-        by_exposure[s["exposure"]] = by_exposure.get(s["exposure"], 0) + 1
-        if s["counted"]:
-            risk_total += s["contribution"]
+    by_exposure: dict[str, int] = {
+        exposure_kind: 0 for exposure_kind in EXPOSURE_MULTIPLIER
+    }
+    for finding in findings:
+        score_row = score_finding(finding)
+        rows.append(score_row)
+        by_exposure[score_row["exposure"]] = by_exposure.get(score_row["exposure"], 0) + 1
+        if score_row["counted"]:
+            risk_total += score_row["contribution"]
             counted += 1
         else:
             skipped_low_confidence += 1

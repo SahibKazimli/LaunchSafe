@@ -32,8 +32,10 @@ from core.finding_files import resolve_path_to_canonical_key, resolve_paths_for_
 
 from .fix_plan_helpers import (
     coerce_findings_into_groups,
+    ensure_fix_group_metadata,
     plan_needs_coercion,
     rewrite_plan_target_files,
+    slugify_title_for_group_id,
 )
 from .fix_group_run import run_single_group_patches
 from .fix_patch_helpers import batch_has_substantive_patches
@@ -179,18 +181,27 @@ async def plan_fixes_node(state: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         emit(fix_id, "error", f"Fix planning failed: {exc!s:.140}", branch="fix-planner")
         fallback_groups: list[FixGroup] = []
+        used_fallback_ids: set[str] = set()
         for index, finding in enumerate(findings):
             resolved_key = resolve_path_to_canonical_key(finding.get("location", ""), files)
             raw_path = (finding.get("location", "") or "").split(":")[0].strip()
             target_files = [resolved_key] if resolved_key else ([raw_path] if raw_path else [])
+            title = str(finding.get("title") or f"Finding {index}").strip()
+            base_gid = slugify_title_for_group_id(title, index)
+            gid = base_gid
+            dup = 1
+            while gid in used_fallback_ids:
+                gid = f"{base_gid}-d{dup}"
+                dup += 1
+            used_fallback_ids.add(gid)
             fallback_groups.append(
                 FixGroup(
-                    group_id=f"fix-{index}",
-                    label=finding.get("title", f"Fix {index}")[:60],
+                    group_id=gid,
+                    label=title[:220],
                     finding_indices=[index],
                     target_files=target_files,
                     risk_level="medium",
-                    commit_message=f"fix: {finding.get('title', 'security fix')[:50]}",
+                    commit_message=f"fix: {title[:50]}",
                 )
             )
         plan = FixPlan(
@@ -224,10 +235,26 @@ async def plan_fixes_node(state: dict[str, Any]) -> dict[str, Any]:
         )
         emit(fix_id, "info", coerced_note, branch="fix-planner")
     rewrite_plan_target_files(plan_dict["groups"], findings, files)
-    if not plan_dict.get("execution_order") and plan_dict.get("groups"):
-        plan_dict["execution_order"] = [
-            item["group_id"] for item in plan_dict["groups"] if item.get("group_id")
-        ]
+    ensure_fix_group_metadata(plan_dict["groups"], findings)
+    group_ids = [
+        str(item["group_id"])
+        for item in plan_dict["groups"]
+        if isinstance(item, dict) and item.get("group_id")
+    ]
+    prev_order = [
+        str(x) for x in (plan_dict.get("execution_order") or []) if isinstance(x, str)
+    ]
+    seen: set[str] = set()
+    merged_order: list[str] = []
+    for gid in prev_order:
+        if gid in group_ids and gid not in seen:
+            merged_order.append(gid)
+            seen.add(gid)
+    for gid in group_ids:
+        if gid not in seen:
+            merged_order.append(gid)
+            seen.add(gid)
+    plan_dict["execution_order"] = merged_order
 
     emit(
         fix_id,
@@ -325,12 +352,14 @@ async def review_patches_node(state: dict[str, Any]) -> dict[str, Any]:
 
     review_sections: list[str] = []
     for patch_result in patch_results:
-        group_id = patch_result.get("group_id", "?")
+        group_heading = (patch_result.get("group_label") or "").strip() or patch_result.get(
+            "group_id", "?"
+        )
         patches = patch_result.get("patches", [])
         if not patches:
             review_sections.append(
                 format_patch_review_section_no_patches(
-                    group_id, str(patch_result.get("notes", "n/a"))
+                    group_heading, str(patch_result.get("notes", "n/a"))
                 )
             )
             continue
@@ -338,7 +367,7 @@ async def review_patches_node(state: dict[str, Any]) -> dict[str, Any]:
             diff_text = patch.get("diff", "") or "(no diff)"
             review_sections.append(
                 format_patch_review_section_diff(
-                    group_id,
+                    group_heading,
                     str(patch.get("path", "?")),
                     diff_text,
                     str(patch.get("explanation", "n/a")),
@@ -380,6 +409,18 @@ async def review_patches_node(state: dict[str, Any]) -> dict[str, Any]:
         )
 
     review_dict = review.model_dump()
+    sanity_bullets: list[str] = []
+    for pr in patch_results:
+        heading = (pr.get("group_label") or "").strip() or str(pr.get("group_id", ""))
+        for p in pr.get("patches") or []:
+            if not isinstance(p, dict):
+                continue
+            for w in p.get("sanity_warnings") or []:
+                sanity_bullets.append(f"[{heading}] {p.get('path')}: {w}")
+    if sanity_bullets:
+        merged_w = sanity_bullets + list(review_dict.get("warnings") or [])
+        review_dict["warnings"] = merged_w
+
     if review_dict.get("approved") and not batch_has_substantive_patches(patch_results):
         review_dict["approved"] = False
         warning_list = list(review_dict.get("warnings") or [])

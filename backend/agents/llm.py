@@ -22,7 +22,7 @@ from __future__ import annotations
 from core.config import LLM_MODEL
 
 
-def get_llm(max_tokens: int | None = None):
+def get_llm(max_tokens: int | None = None, temperature: float | None = None):
     """Return a LangChain chat model configured for the active provider.
 
     Parameters
@@ -30,13 +30,15 @@ def get_llm(max_tokens: int | None = None):
     max_tokens:
         Override the output token budget.  If ``None``, the provider's
         own default applies.
+    temperature:
+        Sampling temperature. When ``None``, uses 0 (deterministic).
 
     Returns
     -------
     A LangChain ``BaseChatModel`` instance (Gemini or Anthropic).
     """
     model = LLM_MODEL
-    kwargs: dict = {"temperature": 0}
+    kwargs: dict = {"temperature": 0.0 if temperature is None else float(temperature)}
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
 

@@ -13,3 +13,6 @@ langchain-anthropic>=0.3.0      # Claude
 
 # Repo ingestion (clone GitHub URLs)
 gitpython>=3.1.40
+
+# Tests
+pytest>=8.0.0

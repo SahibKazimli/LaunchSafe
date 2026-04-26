@@ -74,6 +74,29 @@ async def run_fix_session(
         fix_plan = result.get("fix_plan", {})
         patch_results = result.get("patch_results", [])
         review_result = result.get("review_result", {})
+        findings_done = result.get("findings") or []
+        files_done = result.get("files") or files_blob
+
+        from agents.fix.fix_validators import evaluate_fix_session_quality
+
+        quality_violations = evaluate_fix_session_quality(
+            findings_done,
+            files_done,
+            patch_results,
+        )
+        if quality_violations:
+            review_merged = dict(review_result) if review_result else {}
+            review_merged["approved"] = False
+            warn_list = list(review_merged.get("warnings") or [])
+            for msg in reversed(quality_violations):
+                warn_list.insert(0, f"Quality gate: {msg}")
+            review_merged["warnings"] = warn_list
+            prev_notes = (review_merged.get("notes") or "").strip()
+            gate_blob = " ".join(quality_violations)
+            review_merged["notes"] = (
+                f"{prev_notes}\n{gate_blob}".strip() if prev_notes else gate_blob
+            )
+            review_result = review_merged
 
         _fs.update_fix_session(
             fix_id,
@@ -81,6 +104,7 @@ async def run_fix_session(
             fix_plan=fix_plan,
             patches=patch_results,
             review=review_result,
+            quality_gate_violations=quality_violations,
         )
 
         total_patches = sum(

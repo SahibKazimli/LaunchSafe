@@ -1,13 +1,10 @@
 # LaunchSafe — Startup Security Auditor
 
-LaunchSafe scans a GitHub repo and returns a prioritized,
-CVSS-scored security report in a few minutes. It is built on a small
-**multi-agent LangGraph pipeline** powered by Claude. A recon agent
-profiles the repo, then specialist sub-agents fan out in parallel
-against the parts of the codebase that actually matter, and a final
-synthesize step dedupes and grades the results.
+LaunchSafe clones a GitHub repo and produces a prioritized, CVSS-scored security report in a few minutes. A **multi-agent LangGraph** pipeline profiles the repo, fans out **specialist** sub-agents on the hotspots that matter, then **synthesizes** deduped findings with an executive summary.
 
-### Note: Very computationally intensive, the process will take a few minutes (around 5-10 mins max)
+Optional **Fix mode** proposes concrete patches: semantic locate → edit → review, with server-side sanity checks and quality gates so empty or unsafe diffs are surfaced clearly.
+
+**Expect several minutes per full scan** (often ~5–10 minutes depending on repo size and LLM limits).
 
 ## What it checks
 
@@ -18,43 +15,49 @@ synthesize step dedupes and grades the results.
 | `iac`        | Terraform / K8s / Docker — public buckets, exposed DBs, IAM wildcards      |
 | `auth`       | Login, session, JWT, password hashing, RBAC / IDOR                         |
 | `cicd`       | GitHub Actions / GitLab CI — secrets, untrusted PR triggers, OIDC          |
-| `general`    | Secrets, crypto, SQLi, SSRF, deserialization, CORS, dependency CVEs        |
-| `synthesize` | Dedupes across branches, writes the executive summary + top fixes          |
+| `general`    | Secrets, crypto, SQLi, SSRF, deserialization, CORS, dependency CVEs            |
+| `synthesize` | Dedupes across branches, writes the executive summary + top fixes            |
 
-Each finding gets a CVSS v3.1-aligned base score and a deployment-context
-**exposure** tag (`production` / `internal` / `test` / `example` / `doc`)
-so test-fixture findings don't drag a library repo's grade down to F.
+Each finding gets a CVSS v3.1-aligned base score and a deployment-context **exposure** tag (`production` / `internal` / `test` / `example` / `doc`) so test-only noise does not dominate the grade.
 
-## Architecture
+## Architecture (scan)
 
 ```
-        FastAPI (backend/main.py)
-        /start-scan  /scan-status  /report/<id>
-                     │
-                     ▼
-              LangGraph orchestrator
-                     │
-                  ┌──┴──┐
-                  │recon│  ← mini ReAct agent (list_files, read_files)
-                  └──┬──┘
-                     │  RepoProfile + flags
-                     ▼
-            route_after_recon  (conditional fan-out)
-        ┌──────┬──────┬──────┬──────┐
-        ▼      ▼      ▼      ▼      ▼
-     payments iac   auth   cicd  general    ← parallel ReAct sub-agents
-        └──────┴──────┴──────┴──────┘          (each calls AI scanning tools)
-                     │
-                     ▼
-                synthesize  ← dedupe + LLM exec summary
-                     │
-                     ▼
-                Report JSON
+FastAPI (backend/main.py)
+/start-scan  /scan-status  /report/<id>
+        │
+        ▼
+ LangGraph orchestrator
+        │
+     ┌──┴──┐
+     │recon│  ← mini ReAct agent (list_files, read_files)
+     └──┬──┘
+        │  RepoProfile + flags
+        ▼
+route_after_recon  (conditional fan-out)
+ ┌──────┬──────┬──────┬──────┐
+ ▼      ▼      ▼      ▼      ▼
+payments iac  auth  cicd  general   ← parallel ReAct sub-agents
+ └──────┴──────┴──────┴──────┘
+        │
+        ▼
+   synthesize  ← dedupe + executive summary LLM
+        │
+        ▼
+   Report JSON (+ stashed source for fix mode)
 ```
 
-Sub-agents stream their `think → call → result` events live to the
-frontend over `/scan-status?since=<seq>`, so the user sees what each
-branch is doing as it happens.
+Sub-agents stream **think → tool → result** style events to the UI over `/scan-status`, so branches show live progress.
+
+## Fix mode (patch proposals)
+
+From the report UI you can start a **fix session** (`/start-fix` → `/fix/<id>`). A separate LangGraph run:
+
+1. **Plan** — batches findings into groups (per file / limits on group size).
+2. **Locate + edit** — two-step LLM flow: map findings to **verified** code spans (routes, symbols, fuzzy alignment when line numbers drift), then emit replacements. Patches can be **large** (whole handlers, middleware, app setup) when the issue requires it.
+3. **Review** — optional batch review; the API also runs **quality gates** (e.g. substantive patches vs explanation-only, refusal language without repo evidence, `tests_touched` for substantive diffs).
+
+The backend rejects edits that obviously drop **returns** / **raises** / **HTTPException** without an equivalent replacement. Unified diffs are normalized for the UI (proper newlines).
 
 ## Quick start
 
@@ -63,57 +66,72 @@ git clone https://github.com/SahibKazimli/LaunchSafe.git
 cd LaunchSafe
 
 python3 -m venv venv
-source venv/bin/activate
+source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r backend/requirements.txt
 
-cp backend/.env.example backend/.env
-# edit backend/.env and paste your ANTHROPIC_API_KEY
+# Create backend/.env with at least ANTHROPIC_API_KEY or GEMINI_API_KEY
+# (optional: LAUNCHSAFE_LLM_MODEL, see core/config.py)
 
 cd backend
 uvicorn main:app --reload
 # → http://127.0.0.1:8000
 ```
 
-### Frontend (Vite)
+### Frontend (Vite + TypeScript)
 
-Scan / report / fix pages load TypeScript from `/src/*.ts`. In development, run the Vite dev server and use **port 5173** (not raw `8000` for those pages—FastAPI does not serve `/src/*.ts`).
+Scan, report, and fix pages use TS under `frontend/src/`. For development, run Vite and keep the API on **8000** — Vite proxies API routes.
 
 ```bash
 cd frontend && npm install && npm run dev
 # → http://127.0.0.1:5173
 ```
 
-Keep **uvicorn on 8000** in another terminal: HTML and `fetch()` use relative URLs, and Vite proxies `/start-scan`, `/scan-status`, `/api`, `/start-fix`, `/fix-status`, `/fix-patches`, and `/debug` to the backend.
+Proxied paths include `/start-scan`, `/scan-status`, `/start-fix`, `/fix-status`, `/fix-patches`, and `/debug/*`.
+
+### Tests
+
+```bash
+cd backend && python -m pytest tests/ -q
+```
+
+## Configuration (high level)
+
+Tunables live in `backend/core/config.py` and use the `LAUNCHSAFE_*` env prefix. Examples:
+
+- **`LAUNCHSAFE_LLM_MODEL`** — Claude or Gemini model id (provider is inferred from the name).
+- **`LAUNCHSAFE_FIX_PATCH_MAX_TOKENS`** — output budget for patch generation.
+- **`LAUNCHSAFE_FIX_MAX_CONCURRENT_PATCH_GROUPS`** — parallel fix groups.
+- **`LAUNCHSAFE_FIX_PROMPT_NARROW_TO_CITED`** — `0` (default) uses wider excerpts when cited lines may be stale; set `1` to prefer narrow windows on huge files.
 
 ## Repo layout
 
 ```
 LaunchSafe/
 ├── README.md
-├── Dockerfile                   
+├── Dockerfile
 ├── .dockerignore
 ├── backend/
-│   ├── main.py                   # FastAPI app, scan orchestration, event stream
+│   ├── main.py                 # FastAPI app, static mounts
 │   ├── requirements.txt
-│   ├── .env.example
+│   ├── tests/                  # pytest (fix validators, locate helpers, diff formatting)
+│   ├── core/
+│   │   ├── routes.py           # HTTP: scan, report, fix, debug
+│   │   ├── orchestrator.py     # scan LangGraph driver
+│   │   ├── fix_orchestrator.py # fix LangGraph driver + quality gates
+│   │   ├── config.py           # LAUNCHSAFE_* knobs
+│   │   ├── finding_files.py    # finding → file excerpts for fix prompts
+│   │   └── ...
 │   └── agents/
-│       ├── graph.py              # LangGraph StateGraph wiring
-│       ├── state.py              # ScanAgentState (shared agent state)
-│       ├── recon.py              # Recon mini-agent
-│       ├── specialists.py        # payments / iac / auth / cicd / general
-│       ├── synthesize.py         # Dedupe + executive summary LLM call
-│       ├── runtime_log.py        # Event bus for live UI streaming
-│       ├── schemas.py            # Pydantic models + LLM rubrics
-│       └── tools/
-│           ├── ingest.py         # GitHub clone + zip extraction
-│           ├── scanners.py       # Regex scanners + CVSS scoring engine
-│           ├── ai_tools.py       # ai_scan_file / ai_scan_cicd / ai_audit_auth_flow
-│           └── agent_tools.py    # list_files / read_file / read_files
+│       ├── graph.py            # scan StateGraph
+│       ├── fix/                # fix plan / locate / edit / review graph
+│       ├── prompts/            # specialist + fix prompts
+│       ├── synthesize.py
+│       ├── specialists.py
+│       └── tools/              # ingest, scanners, AI tools, agent_tools
 └── frontend/
-    ├── base.html                 # Shared layout
-    ├── index.html                # Upload page
-    ├── scan.html                 # Live scan progress (branches + event log)
-    └── report.html               # Final findings report
+    ├── src/                    # TypeScript (scan, report, fix UI)
+    ├── index.html, scan.html, report.html, fix.html
+    └── vite.config.ts
 ```
 
 ## Risk scoring
@@ -124,10 +142,9 @@ risk_total   = Σ contribution (only is_true_positive=True findings)
 score        = clamp(100 − 2 × risk_total, 0, 100)
 ```
 
-Exposure multipliers: `production 1.00`, `internal 0.60`, `test 0.15`,
-`example 0.05`, `doc 0.03`.
+Exposure multipliers: `production 1.00`, `internal 0.60`, `test 0.15`, `example 0.05`, `doc 0.03`.
 
-Grade is bucketed on `risk_total` (lower = better):
+Grade buckets on `risk_total` (lower = better):
 
 | risk_total | grade |
 |------------|-------|
@@ -137,17 +154,13 @@ Grade is bucketed on `risk_total` (lower = better):
 | ≤ 30       | D     |
 | > 30       | F     |
 
-The full per-finding math (CVSS, exposure, contribution) is shown in
-the report sidebar.
-
-
 ## Tech stack
 
-- **FastAPI** + **Jinja2** — web layer, no JS framework (yet)
-- **LangGraph** — agent orchestration (conditional fan-out, parallel branches, state reducers)
-- **LangChain** + **Anthropic Claude** — sub-agent reasoning and structured output
-- **Pydantic** — typed schemas for `Finding` / `AuditReport` / `ComplianceRef`
+- **FastAPI** + **Jinja2** — API and HTML shells
+- **Vite** + **TypeScript** — scan / report / fix client
+- **LangGraph** — scan and fix orchestration
+- **LangChain** — LLM adapters (**Anthropic** and/or **Gemini** via config)
+- **Pydantic** — findings, reports, fix plan / patch schemas
 - **GitPython** — repo cloning
-- **python-dotenv** — `.env` loading
-
-
+- **python-dotenv** — environment loading
+- **pytest** — backend tests

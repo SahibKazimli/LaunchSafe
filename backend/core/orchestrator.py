@@ -80,7 +80,8 @@ async def run_scan(scan_id: str, files: dict[str, str]) -> None:
         if report is not None:
             try:
                 report_findings = [
-                    f.model_dump() for f in getattr(report, "findings", []) or []
+                    finding.model_dump()
+                    for finding in getattr(report, "findings", []) or []
                 ]
                 summary = getattr(report, "summary", "") or ""
                 top_fixes = list(getattr(report, "top_fixes", []) or [])

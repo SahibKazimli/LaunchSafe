@@ -108,8 +108,8 @@ async def run_fix_session(
         )
 
         total_patches = sum(
-            len(pr.get("patches", []))
-            for pr in patch_results
+            len(group_result.get("patches", []))
+            for group_result in patch_results
         )
         emit(
             fix_id, "info",

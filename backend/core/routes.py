@@ -265,8 +265,12 @@ async def debug_fix(fix_id: str):
         "fix_plan_groups": len((session.get("fix_plan") or {}).get("groups", [])),
         "patch_groups": len(patches),
         "patches_per_group": [
-            {"group_id": p.get("group_id"), "patch_count": len(p.get("patches", [])), "notes": p.get("notes", "")}
-            for p in patches
+            {
+                "group_id": group_result.get("group_id"),
+                "patch_count": len(group_result.get("patches", [])),
+                "notes": group_result.get("notes", ""),
+            }
+            for group_result in patches
         ],
         "review_approved": (session.get("review") or {}).get("approved"),
         "review_notes": (session.get("review") or {}).get("notes"),
@@ -283,16 +287,16 @@ async def debug_scan(scan_id: str):
     if not scan:
         return {"error": "not found"}
     files = scan.get("_files", {})
-    ffb = scan.get("finding_files") or {}
+    finding_files_bundle = scan.get("finding_files") or {}
     findings = scan.get("findings", [])
     return {
         "status": scan.get("status"),
         "finding_count": len(findings),
-        "findings_severity": [f.get("severity") for f in findings],
-        "finding_locations_sample": [f.get("location") for f in findings[:15]],
+        "findings_severity": [finding.get("severity") for finding in findings],
+        "finding_locations_sample": [finding.get("location") for finding in findings[:15]],
         "files_stashed": len(files),
-        "finding_files_bundle_count": len(ffb),
-        "finding_files_bundle_keys": list(ffb.keys())[:20],
+        "finding_files_bundle_count": len(finding_files_bundle),
+        "finding_files_bundle_keys": list(finding_files_bundle.keys())[:20],
         "file_keys": list(files.keys())[:20],
     }
 

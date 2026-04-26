@@ -46,7 +46,9 @@ def infer_paths_from_finding_text(
     if not findings or not files:
         return []
     blob = " ".join(
-        _finding_narrative_blob(f) for f in findings if isinstance(f, dict)
+        _finding_narrative_blob(finding)
+        for finding in findings
+        if isinstance(finding, dict)
     )
     if not blob.strip():
         return []
@@ -192,12 +194,12 @@ def parse_line_number_from_location(location: str) -> int | None:
     loc = (location or "").strip().replace("\\", "/")
     if not loc:
         return None
-    m = re.search(r":(\d+)-(\d+)\s*$", loc)
-    if m:
-        return int(m.group(1))
-    m = re.search(r":(\d+)\s*$", loc)
-    if m:
-        return int(m.group(1))
+    range_match = re.search(r":(\d+)-(\d+)\s*$", loc)
+    if range_match:
+        return int(range_match.group(1))
+    line_match = re.search(r":(\d+)\s*$", loc)
+    if line_match:
+        return int(line_match.group(1))
     return None
 
 
@@ -217,10 +219,10 @@ def _is_weak_anchor_line(line_text: str) -> bool:
     If any letter or digit appears, the model chose a real line, do not nudge, so the
     highlight matches `location:line` even when that line is wrong (that is a model issue).
     """
-    t = line_text.rstrip("\n").split("#", 1)[0].strip()
-    if not t:
+    code_text = line_text.rstrip("\n").split("#", 1)[0].strip()
+    if not code_text:
         return True
-    if re.search(r"[0-9A-Za-z]", t):
+    if re.search(r"[0-9A-Za-z]", code_text):
         return False
     return True
 
@@ -232,13 +234,17 @@ def _nudge_cited_off_weak_anchor(
     max_up: int = 3,
 ) -> int:
     """Nudge at most a few lines up, only from delimiter-only rows."""
-    n = len(raw_lines)
-    c = min(max(1, cited), n)
-    up = 0
-    while up < max_up and c > 1 and _is_weak_anchor_line(raw_lines[c - 1]):
-        c -= 1
-        up += 1
-    return c
+    line_count = len(raw_lines)
+    cited_line = min(max(1, cited), line_count)
+    steps_up = 0
+    while (
+        steps_up < max_up
+        and cited_line > 1
+        and _is_weak_anchor_line(raw_lines[cited_line - 1])
+    ):
+        cited_line -= 1
+        steps_up += 1
+    return cited_line
 
 
 _EXT_TO_HLJS_LANG: dict[str, str] = {
@@ -439,12 +445,12 @@ def enrich_finding_code_context(
 
     min_highlight_line = min(highlight_file_lines)
     max_highlight_line = max(highlight_file_lines)
-    cover_lo = min(min_highlight_line, cited)
-    cover_hi = max(max_highlight_line, cited)
+    coverage_low_line = min(min_highlight_line, cited)
+    coverage_high_line = max(max_highlight_line, cited)
     window_start, window_end = _snippet_line_window(
         line_count,
-        cover_lo,
-        cover_hi,
+        coverage_low_line,
+        coverage_high_line,
         cited,
         line_margin=line_margin,
         max_window_lines=max_window_lines,

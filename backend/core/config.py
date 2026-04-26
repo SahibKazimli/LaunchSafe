@@ -129,7 +129,7 @@ FIX_PATCH_REACT_BATCH_BYTES: int = _env_int("FIX_PATCH_REACT_BATCH_BYTES", 240_0
 # LangGraph super-steps for the fix-patch ReAct subgraph. Lower = shorter wall-clock per
 # group (may hit the cap and fall back to legacy excerpt-based edit sooner). Raise via env
 # if groups often need more tool rounds (e.g. large manifests).
-FIX_PATCH_REACT_RECURSION_LIMIT: int = _env_int("FIX_PATCH_REACT_RECURSION_LIMIT", 22)
+FIX_PATCH_REACT_RECURSION_LIMIT: int = _env_int("FIX_PATCH_REACT_RECURSION_LIMIT", 30)
 
 
 def fix_patch_react_recursion_limit() -> int:

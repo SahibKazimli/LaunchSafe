@@ -14,10 +14,12 @@ interface Patch {
   path: string;
   explanation: string;
   diff: string;
+  sanity_warnings?: string[];
 }
 
 interface PatchGroup {
   group_id: string;
+  group_label?: string;
   notes?: string;
   patches: Patch[];
 }
@@ -75,9 +77,26 @@ function escapeHtml(unsafe: string): string {
     .replace(/'/g, "&#039;");
 }
 
+/** Recover display when legacy diffs used lineterm=\"\" (single glued line). */
+function normalizeDiffNewlines(diffText: string): string {
+  let t = diffText.replace(/\r\n/g, '\n');
+  if (t.includes('\n')) {
+    return t;
+  }
+  if (t.length < 40 || (!t.includes('@@') && !t.includes('---'))) {
+    return t;
+  }
+  return t
+    .replace(/(---\s+)/g, '\n$1')
+    .replace(/(\+\+\+\s+)/g, '\n$1')
+    .replace(/(@@\s[-\d,]+\s[-\d,]+\s@@)/g, '\n$1')
+    .replace(/([^\n])([-+][^\n])/g, '$1\n$2')
+    .trim();
+}
+
 function formatDiff(diffText: string): string {
   if (!diffText) return 'No diff available.';
-  const lines = diffText.split('\n');
+  const lines = normalizeDiffNewlines(diffText).split('\n');
   return lines
     .map((line) => {
       let rowClass = 'diff-ctx';
@@ -94,6 +113,33 @@ function formatDiff(diffText: string): string {
       );
     })
     .join('');
+}
+
+const REPO_HITS_MARKER = 'Repo-wide hits:';
+
+function formatGroupNotes(notes: string): string {
+  const raw = notes || '';
+  if (!raw.trim()) {
+    return '';
+  }
+  const idx = raw.indexOf(REPO_HITS_MARKER);
+  if (idx === -1) {
+    return `<div class="group-notes-text">${escapeHtml(raw)}</div>`;
+  }
+  const head = raw.slice(0, idx).trim();
+  const tail = raw.slice(idx + REPO_HITS_MARKER.length).trim();
+  const lines = tail.split('\n').map((l) => l.trim()).filter(Boolean);
+  const listItems = lines
+    .map((l) => `<li><code class="repo-hit-line">${escapeHtml(l)}</code></li>`)
+    .join('');
+  const summary = `Repo-wide search hits (${lines.length})`;
+  return (
+    (head ? `<div class="group-notes-text">${escapeHtml(head)}</div>` : '') +
+    `<details class="group-repo-hits">` +
+    `<summary>${escapeHtml(summary)}</summary>` +
+    `<ul class="repo-hits-list">${listItems}</ul>` +
+    `</details>`
+  );
 }
 
 function renderResults(data: { review?: FixReview; patches?: PatchGroup[]; scan_id?: string }) {
@@ -133,16 +179,29 @@ function renderResults(data: { review?: FixReview; patches?: PatchGroup[]; scan_
 
     const head = document.createElement('div');
     head.className = 'group-header';
-    head.innerHTML = `<h3>${escapeHtml(group.group_id)}</h3><p>${escapeHtml(group.notes || '')}</p>`;
+    const title = (group.group_label && group.group_label.trim()) || group.group_id;
+    const sub =
+      group.group_label && group.group_label.trim() && group.group_label.trim() !== group.group_id
+        ? `<p class="group-id-sub">${escapeHtml(group.group_id)}</p>`
+        : '';
+    head.innerHTML =
+      `<h3>${escapeHtml(title)}</h3>${sub}<div class="group-notes">${formatGroupNotes(group.notes || '')}</div>`;
     gCard.appendChild(head);
 
     const pList = group.patches || [];
     for (const p of pList) {
       const pItem = document.createElement('div');
       pItem.className = 'patch-item';
+      const sanity =
+        p.sanity_warnings && p.sanity_warnings.length > 0
+          ? `<div class="patch-sanity"><strong>Sanity check:</strong><ul>${p.sanity_warnings
+              .map((w) => `<li>${escapeHtml(w)}</li>`)
+              .join('')}</ul></div>`
+          : '';
       pItem.innerHTML = `
         <div class="patch-path">${escapeHtml(p.path)}</div>
         <div class="patch-explanation">${escapeHtml(p.explanation)}</div>
+        ${sanity}
         <div class="diff-block">${formatDiff(p.diff)}</div>
       `;
       gCard.appendChild(pItem);

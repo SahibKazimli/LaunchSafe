@@ -35,7 +35,7 @@ def parse_ai_tool_findings(raw: str) -> list[dict]:
     found = data.get("findings")
     if not isinstance(found, list):
         return []
-    return [f for f in found if isinstance(f, dict)]
+    return [item for item in found if isinstance(item, dict)]
 
 
 def collect_salvage(
@@ -47,13 +47,13 @@ def collect_salvage(
     """
     seen_keys: set[tuple] = set()
     out: list[dict] = []
-    for f in salvage_bucket:
-        key = (f.get("title", ""), f.get("location", ""))
+    for finding in salvage_bucket:
+        key = (finding.get("title", ""), finding.get("location", ""))
         if key in seen_keys:
             continue
         seen_keys.add(key)
-        f.setdefault("_branch", branch)
-        out.append(f)
+        finding.setdefault("_branch", branch)
+        out.append(finding)
     return out
 
 
@@ -137,9 +137,9 @@ def _process_message(
             and tool_name in AI_SCAN_TOOL_NAMES
             and isinstance(content, str)
         ):
-            for f in parse_ai_tool_findings(content):
-                f.setdefault("_branch", branch)
-                salvage_bucket.append(f)
+            for salvaged_finding in parse_ai_tool_findings(content):
+                salvaged_finding.setdefault("_branch", branch)
+                salvage_bucket.append(salvaged_finding)
                 added += 1
         suffix = f", +{added} salvaged" if added else ""
         emit(scan_id, "result", f"{tool_name} → {size}B{suffix}", branch=branch)
@@ -155,6 +155,6 @@ def _handle_ai_message(msg: Any, scan_id: str, branch: str) -> None:
     elif isinstance(content, list):
         for block in content:
             if isinstance(block, dict) and block.get("type") == "text":
-                txt = (block.get("text") or "").strip()
-                if txt:
-                    emit(scan_id, "think", txt, branch=branch)
+                text_block = (block.get("text") or "").strip()
+                if text_block:
+                    emit(scan_id, "think", text_block, branch=branch)

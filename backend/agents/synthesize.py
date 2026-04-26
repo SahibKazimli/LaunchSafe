@@ -250,7 +250,10 @@ def synthesize_node(state: dict[str, Any]) -> dict[str, Any]:
     target = state.get("target", "the repository")
 
     branches = _branch_breakdown(raw_findings)
-    branch_summary = ", ".join(f"{b}={n}" for b, n in branches.items()) or "none"
+    branch_summary = ", ".join(
+        f"{branch_name}={finding_count}"
+        for branch_name, finding_count in branches.items()
+    ) or "none"
     emit(
         scan_id,
         "branch_start",

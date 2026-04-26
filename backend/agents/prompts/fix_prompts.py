@@ -404,19 +404,26 @@ def format_patch_locate_user(
 def remediation_templates_for_findings(findings: list[dict]) -> str:
     """Return extra template text inferred from vuln class keywords."""
     blob = " ".join(
-        str(f.get("title") or "") + " " + str(f.get("description") or "")
-        for f in findings
-        if isinstance(f, dict)
+        str(finding.get("title") or "")
+        + " "
+        + str(finding.get("description") or "")
+        for finding in findings
+        if isinstance(finding, dict)
     ).lower()
     chunks: list[str] = []
     if any(
-        k in blob
-        for k in ("idor", "insecure direct object", "object reference", "authorization")
+        keyword in blob
+        for keyword in (
+            "idor",
+            "insecure direct object",
+            "object reference",
+            "authorization",
+        )
     ):
         chunks.append(PATCH_TEMPLATE_IDOR.strip())
     if any(
-        k in blob
-        for k in (
+        keyword in blob
+        for keyword in (
             "unauthenticated",
             "search",
             "vector",
@@ -428,8 +435,8 @@ def remediation_templates_for_findings(findings: list[dict]) -> str:
     ):
         chunks.append(PATCH_TEMPLATE_SEARCH_LEAK.strip())
     if any(
-        k in blob
-        for k in (
+        keyword in blob
+        for keyword in (
             "access control",
             "broken access",
             "privilege",

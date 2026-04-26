@@ -104,9 +104,15 @@ async def recon_node(state: dict[str, Any]) -> dict[str, Any]:
         return {"repo_profile": fallback.model_dump(), "messages": []}
 
     flags = []
-    for f in ("has_iac", "has_cicd", "has_auth", "has_payments", "has_user_data"):
-        if getattr(profile, f, False):
-            flags.append(f.replace("has_", ""))
+    for flag_attr in (
+        "has_iac",
+        "has_cicd",
+        "has_auth",
+        "has_payments",
+        "has_user_data",
+    ):
+        if getattr(profile, flag_attr, False):
+            flags.append(flag_attr.replace("has_", ""))
     emit(
         scan_id,
         "branch_done",

@@ -150,10 +150,10 @@ def _make_specialist_node(name: str, prompt: str, kickoff_msg: str):
         tagged: list[dict] = []
 
         if sr is not None:
-            for f in getattr(sr, "findings", []) or []:
-                d = f.model_dump()
-                d["_branch"] = name
-                tagged.append(d)
+            for finding_model in getattr(sr, "findings", []) or []:
+                finding_dict = finding_model.model_dump()
+                finding_dict["_branch"] = name
+                tagged.append(finding_dict)
 
         if not tagged and salvage_bucket:
             tagged = collect_salvage(salvage_bucket, branch=name)

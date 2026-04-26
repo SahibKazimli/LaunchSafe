@@ -35,40 +35,81 @@ Rules:
     manifest bumps.
   - If you would output only 1 group for 6+ findings, you have made an error:
     re-split into multiple groups that obey the limits above.
+  - **Every group MUST set:**
+      - ``group_id``: short unique **kebab-case slug from the main issue** (not generic
+        placeholders). Examples: ``idor-user-profile``, ``sql-injection-login-handler``.
+      - ``label``: a **human-readable one-line title** shown in the UI (usually the
+        finding title, e.g. "Broken object-level authorization on user data").
+    Never emit an empty ``group_id`` or ``{}`` for a group — both fields are required.
 """
 
-# ── Step 1: locate verbatim regions (no patched_snippet, no diff) ─────────
+# ── Step 1: semantic locate (no patched_snippet, no diff) ─────────
 
 PATCH_LOCATE_SYSTEM = """\
 You are a senior security engineer **locating** code to change (step 1 of 2).
 You receive **only this group’s findings** and **ORIGINAL FILES** excerpts.
 
+**Critical:** Reported line numbers may be stale. Treat locations as *hints*.
+Find the **semantically correct** implementation: route decorators, handler names,
+router registrations, and data-access code that match the finding — even if the
+excerpt does not match the audit line numbers.
+
 Task: For each finding you can address, output one `items` row with:
   - `path`: must match a file path from the ### headings in ORIGINAL FILES.
-  - `original_snippet`: **exact** contiguous text copied from that file’s excerpt
-    (verbatim substring; same whitespace; do not paraphrase or “clean up”).
+  - `original_snippet`: the **best contiguous block** from the excerpt that covers
+    the vulnerable behavior (copy from the ``` block when possible). If the excerpt
+    is misaligned, paste the closest matching block you see and rely on anchors below.
+  - `anchor_route`: HTTP route if applicable, e.g. `GET /users/{user_id}` or `/search/chunks`.
+  - `anchor_symbols`: Python function/method names for the handler or data layer.
+  - `confidence`: 0.0–1.0 — how sure you are this maps to the finding.
 
 Rules:
   - Do **not** output patched code, replacements, or diffs — only regions to find.
-  - Include enough lines (often a full function, handler, or config stanza) to
-    apply the remediation safely, but only text that **literally appears** in the excerpt.
-  - If the issue needs more than a one-line tweak (validation, safe defaults, auth
-    checks), your `original_snippet` should span the whole region you will need to
-    replace so step 2 can apply a **complete** fix in one go.
-  - If a finding has no matching file or no verbatim region, skip it and mention in `notes`.
+  - Prefer a **large enough** region to edit: full handler, whole route cluster, middleware
+    section, `FastAPI()` app setup, or config block — not a single line — whenever the fix
+    needs broader context (CSP headers, JWT validation, auth dependencies, etc.).
+  - If you cannot match text exactly, still fill `anchor_route` / `anchor_symbols`;
+    the server will align to real code using the full ingested file.
   - Multiple `items` per path are allowed for separate regions.
+  - A response that only explains why nothing can be found is **invalid** unless
+    the behavior truly does not exist in ORIGINAL FILES — then say so in `notes`.
 """
 
 PATCH_LOCATE_RETRY = """
 
-Retry: Every `original_snippet` must appear **exactly** in ORIGINAL FILES. Copy-paste
-from the ``` block; do not invent or summarize.
+Retry: Provide at least one `items` row with a real `path`, a concrete `original_snippet`
+from the excerpt (best-effort), and **anchor_route** or **anchor_symbols** so the
+server can resolve stale citations.
 """
 
 PATCH_LOCATE_RETRY_2 = """
 
-Final attempt: At least one valid `items` row with path + verbatim `original_snippet`
-from the provided excerpts.
+Final attempt: Emit one valid `items` row: path + snippet (from the file excerpt) +
+anchors. Do not refuse solely because audit line numbers differ from the file.
+"""
+
+PATCH_TEMPLATE_IDOR = """
+**IDOR / ownership:** Ensure the authenticated subject may only access their own
+resource (or admins). Add an explicit check comparing `current_user.id` (or equivalent)
+to the resource owner id before returning data; return 403 otherwise.
+"""
+
+PATCH_TEMPLATE_SEARCH_LEAK = """
+**Unauthenticated search / data leak:** Require an authentication dependency on the
+route; filter queries by tenant or user id in the data layer; deny by default when
+scope is missing.
+"""
+
+PATCH_TEMPLATE_BAC = """
+**Broken access control:** Prefer a centralized authorization helper (e.g. a single
+function or dependency) invoked from the handler instead of ad-hoc checks scattered
+only in some branches.
+"""
+
+PATCH_FALLBACK_INTRO = """
+---
+**Defense-in-depth templates** (use when anchors are weak; still produce a real patch
+in the listed LOCATE TARGETS, not rationale-only):
 """
 
 # ── Step 2: produce replacements (patched_snippet only; diff computed server-side) ─
@@ -76,31 +117,52 @@ from the provided excerpts.
 PATCH_EDIT_SYSTEM = """\
 You are a senior security engineer **applying** security fixes (step 2 of 2).
 The user message lists **LOCATE TARGETS**: each `[index]` has a `path` and an
-`original_snippet` that is already verified to exist in the repo.
+`original_snippet` that the server **verified** exists in the repo (semantic alignment
+may have adjusted stale excerpts).
 
 Task: For each index you are fixing, output one `edits` row with:
   - `index`: same integer as in LOCATE TARGETS.
-  - `patched_snippet`: the **full** replacement for that `original_snippet` only —
+  - `patched_snippet`: the **full** replacement for that index’s `original_snippet`
+    (the verified contiguous span from step 1). That span may be **many lines** —
+    entire functions, route groups, or app factory sections are fine. The snippet must be
     complete, syntactically valid, balanced brackets/parens, closed strings.
   - `explanation`: one sentence on what changed and why it fixes the finding.
 
+Also set on the structured output root (not inside each edit):
+  - `controls_added`: concrete security controls you introduced (authz, ownership,
+    scoping, deny-by-default). Use `none` only if inapplicable.
+  - `tests_touched`: tests or assertions to add (file names or scenarios); `none`
+    if the snapshot has no test layout.
+  - `residual_risk`: what could still go wrong after this patch.
+
 Rules:
   - Do **not** output unified diff — the server computes it.
-  - `patched_snippet` must be a drop-in replacement for **only** that `original_snippet`
-    block (same span of logic; do not merge unrelated regions).
+  - `patched_snippet` must replace **exactly** the `original_snippet` text shown for that
+    index (engine constraint), but that block can be **large**. Do **not** shrink the fix
+    to the smallest possible edit when a broader change is needed — **correct and
+    durable** beats minimal line churn. Stay on-topic for this finding (no unrelated refactors).
   - The fix must **meaningfully** address the vulnerability: add the checks, crypto,
     or configuration the finding calls for, not a cosmetic rename or no-op.
   - Preserve behavior outside the security fix; do not delete validation or error
     paths unless the finding explicitly requires it.
+  - **Never remove** ``return`` statements, ``raise`` / ``HTTPException``, or
+    not-found handling unless you **replace** them with equivalent behavior on all
+    code paths (a function that returned a row must still return or raise).
   - Dependency files: never relax a safe pin to a looser minimum (e.g. do not replace
     `pkg==2.32.5` with `pkg>=2.31.0`).
   - Emit one edit per index you can fix; omit indices you cannot fix and say why in `notes`.
+  - Output that only explains why no change was made is **invalid** unless the
+    vulnerable code is truly absent from ORIGINAL FILES.
+  - **Never** paste unified-diff syntax into `patched_snippet`: no lines starting with
+    `+`, `-`, `@@`, `---`, or `+++`; no merged `-foo+bar` on one line. Output only
+    valid source code as it should exist after the fix.
 """
 
 PATCH_EDIT_RETRY = """
 
 Retry: Each `patched_snippet` must be **complete** (no truncated strings or half-blocks).
-Match the `index` to LOCATE TARGETS and replace only that original block.
+Match the `index` to LOCATE TARGETS. The replacement may be long — include the full
+revised function/section if that is what a proper fix requires.
 """
 
 PATCH_EDIT_RETRY_2 = """
@@ -110,8 +172,49 @@ Final attempt: For each listed index, either emit a complete `patched_snippet` o
 
 PATCH_EDIT_RETRY_GROUNDING = """
 
-Your prior output was rejected. The `patched_snippet` must replace **exactly** the
-`original_snippet` shown for that index — same scope, fully written out.
+Your prior output was rejected. The `patched_snippet` must replace **exactly** the full
+`original_snippet` shown for that index (verbatim span), fully written out — size is not
+a problem; incompleteness or truncation is.
+"""
+
+PATCH_EDIT_RETRY_SYNTAX = """
+
+Your prior edit was rejected: applied to the file it produced **invalid Python** (syntax
+error), contained diff markers (+/- lines), or the replace span was ambiguous. Emit only
+legal source code; include needed imports/symbols; close all parens/brackets/strings.
+"""
+
+# ── Step 2 (ReAct): tool-grounded edits — no full-file paste in user message ─
+
+PATCH_REACT_EDIT_SYSTEM = """\
+You are a senior security engineer **applying** security fixes (step 2 of 2).
+You can **explore the repo with tools**, then return a structured **PatchEditBundle**
+(same schema as a single-shot edit model).
+
+Tools (use them):
+  - `list_repo_files` — paths + sizes in the ingested snapshot.
+  - `grep_repo` — literal substring search across files (quick discovery).
+  - `fix_read_file` / `fix_read_files` — read file bodies from the snapshot (prefer batch).
+
+**Grounding rule (mandatory):** Before you return your final structured output, you **must**
+call `fix_read_file` or `fix_read_files` at least once for **every distinct file path**
+listed in LOCATE TARGETS that you patch (every `index` you include in `edits`). If you
+skip this, the server will **discard** your patches. `list_repo_files` and `grep_repo` do
+**not** count as reading a file.
+
+Task: For each locate index you fix, output one `edits` row:
+  - `index`: integer from LOCATE TARGETS.
+  - `patched_snippet`: full replacement for that row's `original_snippet` (must match the
+    **verified** text from your tool reads — excerpts in the user message may be truncated).
+  - `explanation`: one sentence.
+
+Also set on the root object: `controls_added`, `tests_touched`, `residual_risk`, `notes`.
+
+Same rules as non-tool mode:
+  - No unified diff in `patched_snippet`; no `+`/`-` line markers or merged `-a+b` lines.
+  - Meaningful security fix — not comments-only or cosmetic renames for auth issues.
+  - Never remove `return` / `raise` / `HTTPException` without equivalent behavior.
+  - Dependency pins: never downgrade a `pkg==version` pin.
 """
 
 REVIEW_SYSTEM = """\
@@ -154,7 +257,8 @@ def format_fix_excerpt_full_file(
 ) -> str:
     return (
         f"### {matched_path} (COMPLETE FILE — {n} lines, {char_len} chars; "
-        "apply a minimal in-place fix)\n"
+        "you may change whole functions, route groups, middleware/CORS/CSP/JWT setup, "
+        "or other large sections — prefer a **complete** fix over the smallest diff)\n"
         f"```\n{content}\n```"
     )
 
@@ -164,7 +268,8 @@ def format_fix_excerpt_large_window(
 ) -> str:
     return (
         f"### {matched_path} (lines {lo}-{hi} of {n}; file too large for full paste; "
-        "excerpt around cited finding line(s))\n"
+        "excerpt around cited finding — expand locate/edit to the full handler or section "
+        "if the fix needs more than this window)\n"
         f"```\n{excerpt}\n```"
     )
 
@@ -264,7 +369,7 @@ def format_patch_locate_targets_block(validated: list[tuple[str, str]]) -> str:
     for i, (path, orig) in enumerate(validated):
         blocks.append(
             f"#### LOCATE TARGET [{i}] path=`{path}`\n"
-            f"original_snippet (replace this exact block):\n```\n{orig}\n```"
+            f"original_snippet (replace this **entire** verified block — may be many lines):\n```\n{orig}\n```"
         )
     return "\n\n".join(blocks)
 
@@ -287,11 +392,55 @@ def format_patch_locate_user(
         f"[report #N] matches the scan’s finding order.\n\n"
         f"FIX GROUP: {group_label}\n"
         f"Commit message: {commit_message}\n"
-        f"Risk level: {risk_level}\n\n"
+        f"Risk level: {risk_level}\n"
+        f"(Step 1: locate **large** regions when needed — whole functions, route blocks, "
+        f"app/middleware setup — not single-line snippets if the fix requires more.)\n\n"
         f"FINDINGS TO FIX (group):\n{finding_text}\n\n"
         f"ORIGINAL FILES:\n{files_text}"
         f"{broad_path_hint}"
     )
+
+
+def remediation_templates_for_findings(findings: list[dict]) -> str:
+    """Return extra template text inferred from vuln class keywords."""
+    blob = " ".join(
+        str(f.get("title") or "") + " " + str(f.get("description") or "")
+        for f in findings
+        if isinstance(f, dict)
+    ).lower()
+    chunks: list[str] = []
+    if any(
+        k in blob
+        for k in ("idor", "insecure direct object", "object reference", "authorization")
+    ):
+        chunks.append(PATCH_TEMPLATE_IDOR.strip())
+    if any(
+        k in blob
+        for k in (
+            "unauthenticated",
+            "search",
+            "vector",
+            "data leak",
+            "leak",
+            "exposure",
+            "tenant",
+        )
+    ):
+        chunks.append(PATCH_TEMPLATE_SEARCH_LEAK.strip())
+    if any(
+        k in blob
+        for k in (
+            "access control",
+            "broken access",
+            "privilege",
+            "escalation",
+            "forbidden",
+        )
+    ):
+        chunks.append(PATCH_TEMPLATE_BAC.strip())
+    if not chunks:
+        return ""
+    return PATCH_FALLBACK_INTRO + "\n".join(chunks)
 
 
 def format_patch_edit_user(
@@ -303,17 +452,49 @@ def format_patch_edit_user(
     last_target_index: int,
     locate_block: str,
     files_text: str,
+    remediation_templates: str = "",
 ) -> str:
+    extra = f"\n{remediation_templates}" if remediation_templates.strip() else ""
     return (
         f"{report_context}\n\n"
         f"---\n"
         f"## Step 2 — apply fixes (this group only)\n"
         f"FIX GROUP: {group_label}\n"
         f"Commit message: {commit_message}\n"
-        f"Risk level: {risk_level}\n\n"
+        f"Risk level: {risk_level}\n"
+        f"(Step 2: `patched_snippet` may be **long** — refactor whole sections if that is "
+        f"what a correct fix needs; do not under-shoot for a tiny diff.)\n\n"
         f"FINDINGS TO FIX (group):\n{finding_text}\n\n"
         f"LOCATE TARGETS (indices 0..{last_target_index}):\n{locate_block}\n\n"
         f"ORIGINAL FILES (same excerpts as step 1):\n{files_text}"
+        f"{extra}"
+    )
+
+
+def format_patch_edit_user_react(
+    report_context: str,
+    group_label: str,
+    commit_message: str,
+    risk_level: str,
+    finding_text: str,
+    last_target_index: int,
+    locate_block: str,
+    remediation_templates: str = "",
+) -> str:
+    """Step-2 user message when using the ReAct patch agent (no inlined file bodies)."""
+    extra = f"\n{remediation_templates}" if remediation_templates.strip() else ""
+    return (
+        f"{report_context}\n\n"
+        f"---\n"
+        f"## Step 2 — apply fixes (this group only) — **use read tools**\n"
+        f"FIX GROUP: {group_label}\n"
+        f"Commit message: {commit_message}\n"
+        f"Risk level: {risk_level}\n"
+        f"Full file bodies are **not** inlined below. Call `fix_read_file` / `fix_read_files` "
+        f"for each path in LOCATE TARGETS before returning your PatchEditBundle.\n\n"
+        f"FINDINGS TO FIX (group):\n{finding_text}\n\n"
+        f"LOCATE TARGETS (indices 0..{last_target_index}):\n{locate_block}\n"
+        f"{extra}"
     )
 
 

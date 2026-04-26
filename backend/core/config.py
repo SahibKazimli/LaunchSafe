@@ -108,6 +108,33 @@ FIX_PATCH_FILE_PROMPT_MAX_CHARS: int = _env_int(
 FIX_PATCH_LINE_MARGIN: int = _env_int("FIX_PATCH_LINE_MARGIN", 16)
 # How many fix groups may run LLM locate+edit concurrently (semaphore). 1 = sequential.
 FIX_MAX_CONCURRENT_PATCH_GROUPS: int = _env_int("FIX_MAX_CONCURRENT_PATCH_GROUPS", 3)
+# When 1, narrow patch prompts to cited line windows for huge files (can miss stale lines).
+# Default 0: prefer wider windows so semantic locate can recover from bad citations.
+FIX_PROMPT_NARROW_TO_CITED: int = _env_int("FIX_PROMPT_NARROW_TO_CITED", 0)
+# Sampling temperature for fix patch LLM (0 = deterministic). Scan/plan may still use defaults.
+FIX_PATCH_LLM_TEMPERATURE: float = _env_float("FIX_PATCH_LLM_TEMPERATURE", 0.0)
+# When 1, reject .py patches whose replacement breaks ``compile()`` on the full file.
+# Set 0 only to debug (may allow broken patches through).
+FIX_PATCH_VERIFY_PYTHON_COMPILE: int = _env_int("FIX_PATCH_VERIFY_PYTHON_COMPILE", 1)
+# When 1, step-2 patch generation uses a ReAct loop (read/search tools) and rejects
+# patches unless every edited path was read via tools (see fix_patch_react).
+FIX_PATCH_REACT_ENABLED: int = _env_int("FIX_PATCH_REACT_ENABLED", 1)
+# If tool-grounding fails or the react agent returns no structured bundle, fall back
+# to the legacy single-shot edit LLM (full excerpts in prompt).
+FIX_PATCH_REACT_FALLBACK_LEGACY: int = _env_int("FIX_PATCH_REACT_FALLBACK_LEGACY", 1)
+# Max bytes per file returned by fix-patch read tools (large handlers).
+FIX_PATCH_REACT_READ_CAP: int = _env_int("FIX_PATCH_REACT_READ_CAP", 80_000)
+# Total cap for fix_read_files batch (bytes of raw content before JSON).
+FIX_PATCH_REACT_BATCH_BYTES: int = _env_int("FIX_PATCH_REACT_BATCH_BYTES", 240_000)
+# LangGraph super-steps for the fix-patch ReAct subgraph. Lower = shorter wall-clock per
+# group (may hit the cap and fall back to legacy excerpt-based edit sooner). Raise via env
+# if groups often need more tool rounds (e.g. large manifests).
+FIX_PATCH_REACT_RECURSION_LIMIT: int = _env_int("FIX_PATCH_REACT_RECURSION_LIMIT", 22)
+
+
+def fix_patch_react_recursion_limit() -> int:
+    """Clamp so env can go below former default without forcing a high floor."""
+    return max(10, FIX_PATCH_REACT_RECURSION_LIMIT)
 
 # Fewer files per ``select_hotspots`` → fewer follow-up reads / AI scans
 SELECT_HOTSPOT_MAX_FILES: int = _env_int("SELECT_HOTSPOT_MAX_FILES", 6)

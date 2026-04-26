@@ -2,9 +2,15 @@
 
 LaunchSafe clones a GitHub repo and produces a prioritized, CVSS-scored security report in a few minutes. A **multi-agent LangGraph** pipeline profiles the repo, fans out **specialist** sub-agents on the hotspots that matter, then **synthesizes** deduped findings with an executive summary.
 
-Optional **Fix mode** proposes concrete patches: semantic locate → edit → review, with server-side sanity checks and quality gates so empty or unsafe diffs are surfaced clearly.
+Optional **Fix mode** proposes concrete patches: semantic locate → **tool-grounded ReAct edit** (read/search the ingested snapshot, then structured patches) → legacy excerpt-based edit on fallback → review, with server-side sanity checks and quality gates so empty or unsafe diffs are surfaced clearly.
 
-**Expect several minutes per full scan** (often ~5–10 minutes depending on repo size and LLM limits).
+**Expect several minutes per full scan** (often ~3–10 minutes depending on repo size and LLM limits).
+
+## Web UI
+
+Landing page — paste a public GitHub URL (or upload a zip from the same flow) to run a full audit:
+
+![LaunchSafe landing page — security audit platform](docs/images/landing-page.png)
 
 ## What it checks
 
@@ -54,10 +60,28 @@ Sub-agents stream **think → tool → result** style events to the UI over `/sc
 From the report UI you can start a **fix session** (`/start-fix` → `/fix/<id>`). A separate LangGraph run:
 
 1. **Plan** — batches findings into groups (per file / limits on group size).
-2. **Locate + edit** — two-step LLM flow: map findings to **verified** code spans (routes, symbols, fuzzy alignment when line numbers drift), then emit replacements. Patches can be **large** (whole handlers, middleware, app setup) when the issue requires it.
-3. **Review** — optional batch review; the API also runs **quality gates** (e.g. substantive patches vs explanation-only, refusal language without repo evidence, `tests_touched` for substantive diffs).
+2. **Locate + edit** — map findings to **verified** code spans (routes, symbols, fuzzy alignment when line numbers drift), then apply fixes. The **edit** step prefers a **ReAct loop** (`list_repo_files`, `grep_repo`, `fix_read_file` / `fix_read_files`) so the model grounds patches in files it actually read; if grounding fails or the subgraph hits its step cap, it **falls back** to the previous single-shot edit (full excerpts in the prompt). Patches can be **large** (whole handlers, middleware, app setup) when the issue requires it.
+3. **Review** — optional batch review; the API also runs **quality gates** (e.g. substantive patches vs explanation-only, refusal language without repo evidence, `tests_touched` for substantive non-manifest diffs).
 
 The backend rejects edits that obviously drop **returns** / **raises** / **HTTPException** without an equivalent replacement. Unified diffs are normalized for the UI (proper newlines).
+
+### Screenshots
+
+Live **fix session** log (locate → edit attempts) and **report** finding detail:
+
+![Fix session — live agent log](docs/images/fix-mode/fix-session-live-log.png)
+
+![Report — finding detail with recommended fix](docs/images/fix-mode/report-finding-detail.png)
+
+Example **patches** produced for IDOR-style issues (auth dependency + ownership check):
+
+![Patch — GET /users/{user_id}](docs/images/fix-mode/patch-idor-user-by-id.png)
+
+![Patch — GET /users/email/{email}](docs/images/fix-mode/patch-idor-user-by-email.png)
+
+ReAct step hitting the LangGraph **recursion limit** (default kept low for shorter runs); the worker then uses **legacy excerpt-based edit**:
+
+![ReAct log — recursion limit and legacy fallback](docs/images/fix-mode/react-log-recursion-fallback.png)
 
 ## Quick start
 
@@ -102,12 +126,18 @@ Tunables live in `backend/core/config.py` and use the `LAUNCHSAFE_*` env prefix.
 - **`LAUNCHSAFE_FIX_PATCH_MAX_TOKENS`** — output budget for patch generation.
 - **`LAUNCHSAFE_FIX_MAX_CONCURRENT_PATCH_GROUPS`** — parallel fix groups.
 - **`LAUNCHSAFE_FIX_PROMPT_NARROW_TO_CITED`** — `0` (default) uses wider excerpts when cited lines may be stale; set `1` to prefer narrow windows on huge files.
+- **`LAUNCHSAFE_FIX_PATCH_REACT_RECURSION_LIMIT`** — LangGraph super-steps for the patch ReAct subgraph (default **22**; lower = faster, more likely fallback; raise if groups often need extra tool rounds).
+- **`LAUNCHSAFE_FIX_PATCH_REACT_ENABLED`** / **`LAUNCHSAFE_FIX_PATCH_REACT_FALLBACK_LEGACY`** — toggle tool-grounded edit and excerpt fallback (defaults `1`).
 
 ## Repo layout
 
 ```
 LaunchSafe/
 ├── README.md
+├── docs/
+│   └── images/            # README screenshots
+│       ├── landing-page.png
+│       └── fix-mode/
 ├── Dockerfile
 ├── .dockerignore
 ├── backend/

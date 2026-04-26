@@ -163,4 +163,3 @@ Grade buckets on `risk_total` (lower = better):
 - **Pydantic** — findings, reports, fix plan / patch schemas
 - **GitPython** — repo cloning
 - **python-dotenv** — environment loading
-- **pytest** — backend tests

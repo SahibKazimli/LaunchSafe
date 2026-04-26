@@ -38,8 +38,8 @@ let lastSeq = 0;
 const allEvents: FixEvent[] = [];
 
 function tick() {
-  const s = Math.round((Date.now() - startedAt) / 1000);
-  document.getElementById('elapsed')!.textContent = s + 's';
+  const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
+  document.getElementById('elapsed')!.textContent = elapsedSeconds + 's';
 }
 
 function renderEventRow(ev: FixEvent): HTMLDivElement {
@@ -79,14 +79,14 @@ function escapeHtml(unsafe: string): string {
 
 /** Recover display when legacy diffs used lineterm=\"\" (single glued line). */
 function normalizeDiffNewlines(diffText: string): string {
-  let t = diffText.replace(/\r\n/g, '\n');
-  if (t.includes('\n')) {
-    return t;
+  let normalized = diffText.replace(/\r\n/g, '\n');
+  if (normalized.includes('\n')) {
+    return normalized;
   }
-  if (t.length < 40 || (!t.includes('@@') && !t.includes('---'))) {
-    return t;
+  if (normalized.length < 40 || (!normalized.includes('@@') && !normalized.includes('---'))) {
+    return normalized;
   }
-  return t
+  return normalized
     .replace(/(---\s+)/g, '\n$1')
     .replace(/(\+\+\+\s+)/g, '\n$1')
     .replace(/(@@\s[-\d,]+\s[-\d,]+\s@@)/g, '\n$1')
@@ -128,9 +128,9 @@ function formatGroupNotes(notes: string): string {
   }
   const head = raw.slice(0, idx).trim();
   const tail = raw.slice(idx + REPO_HITS_MARKER.length).trim();
-  const lines = tail.split('\n').map((l) => l.trim()).filter(Boolean);
+  const lines = tail.split('\n').map((line) => line.trim()).filter(Boolean);
   const listItems = lines
-    .map((l) => `<li><code class="repo-hit-line">${escapeHtml(l)}</code></li>`)
+    .map((line) => `<li><code class="repo-hit-line">${escapeHtml(line)}</code></li>`)
     .join('');
   const summary = `Repo-wide search hits (${lines.length})`;
   return (
@@ -161,53 +161,59 @@ function renderResults(data: { review?: FixReview; patches?: PatchGroup[]; scan_
   if (review.warnings && review.warnings.length > 0) {
     const wEl = document.getElementById('review-warnings')!;
     wEl.style.display = 'block';
-    wEl.innerHTML = '<strong>Warnings:</strong><ul>' + review.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('') + '</ul>';
+    wEl.innerHTML =
+      '<strong>Warnings:</strong><ul>'
+      + review.warnings.map(warning => `<li>${escapeHtml(warning)}</li>`).join('')
+      + '</ul>';
   }
 
   if (review.conflicts && review.conflicts.length > 0) {
     const cEl = document.getElementById('review-conflicts')!;
     cEl.style.display = 'block';
-    cEl.innerHTML = '<strong>Conflicts:</strong><ul>' + review.conflicts.map(c => `<li>${escapeHtml(c)}</li>`).join('') + '</ul>';
+    cEl.innerHTML =
+      '<strong>Conflicts:</strong><ul>'
+      + review.conflicts.map(conflict => `<li>${escapeHtml(conflict)}</li>`).join('')
+      + '</ul>';
   }
 
   const container = document.getElementById('groups-container')!;
   container.innerHTML = '';
 
   for (const group of patches) {
-    const gCard = document.createElement('div');
-    gCard.className = 'group-card';
+    const groupCard = document.createElement('div');
+    groupCard.className = 'group-card';
 
-    const head = document.createElement('div');
-    head.className = 'group-header';
+    const headerRow = document.createElement('div');
+    headerRow.className = 'group-header';
     const title = (group.group_label && group.group_label.trim()) || group.group_id;
     const sub =
       group.group_label && group.group_label.trim() && group.group_label.trim() !== group.group_id
         ? `<p class="group-id-sub">${escapeHtml(group.group_id)}</p>`
         : '';
-    head.innerHTML =
+    headerRow.innerHTML =
       `<h3>${escapeHtml(title)}</h3>${sub}<div class="group-notes">${formatGroupNotes(group.notes || '')}</div>`;
-    gCard.appendChild(head);
+    groupCard.appendChild(headerRow);
 
-    const pList = group.patches || [];
-    for (const p of pList) {
-      const pItem = document.createElement('div');
-      pItem.className = 'patch-item';
+    const patchList = group.patches || [];
+    for (const patch of patchList) {
+      const patchItem = document.createElement('div');
+      patchItem.className = 'patch-item';
       const sanity =
-        p.sanity_warnings && p.sanity_warnings.length > 0
-          ? `<div class="patch-sanity"><strong>Sanity check:</strong><ul>${p.sanity_warnings
-              .map((w) => `<li>${escapeHtml(w)}</li>`)
+        patch.sanity_warnings && patch.sanity_warnings.length > 0
+          ? `<div class="patch-sanity"><strong>Sanity check:</strong><ul>${patch.sanity_warnings
+              .map((sanityWarning) => `<li>${escapeHtml(sanityWarning)}</li>`)
               .join('')}</ul></div>`
           : '';
-      pItem.innerHTML = `
-        <div class="patch-path">${escapeHtml(p.path)}</div>
-        <div class="patch-explanation">${escapeHtml(p.explanation)}</div>
+      patchItem.innerHTML = `
+        <div class="patch-path">${escapeHtml(patch.path)}</div>
+        <div class="patch-explanation">${escapeHtml(patch.explanation)}</div>
         ${sanity}
-        <div class="diff-block">${formatDiff(p.diff)}</div>
+        <div class="diff-block">${formatDiff(patch.diff)}</div>
       `;
-      gCard.appendChild(pItem);
+      groupCard.appendChild(patchItem);
     }
 
-    container.appendChild(gCard);
+    container.appendChild(groupCard);
   }
 
   // Update "Back to Report" link with scan_id
@@ -252,24 +258,24 @@ async function poll() {
   }
 
   const working = document.getElementById('working-label')!;
-  const st = document.getElementById('status-label')!;
+  const statusLabel = document.getElementById('status-label')!;
   if (data.status === 'running') {
-    if (st && st.textContent!.indexOf('Initializing') !== -1) {
-      st.innerHTML = 'In progress <span class="elapsed" id="elapsed">0s</span>';
+    if (statusLabel && statusLabel.textContent!.indexOf('Initializing') !== -1) {
+      statusLabel.innerHTML = 'In progress <span class="elapsed" id="elapsed">0s</span>';
     }
     if (data.events && data.events.length) {
       const last = data.events[data.events.length - 1];
-      const b = String(last.branch || 'fix');
-      if (b === 'fix-planner') {
+      const branchName = String(last.branch || 'fix');
+      if (branchName === 'fix-planner') {
         working.textContent = 'Planning fix batches\u2026';
-      } else if (b === 'fix-reviewer') {
+      } else if (branchName === 'fix-reviewer') {
         working.textContent = 'Reviewing generated patches\u2026';
-      } else if (b === 'fix' && (last.text || '').indexOf('Loading') !== -1) {
+      } else if (branchName === 'fix' && (last.text || '').indexOf('Loading') !== -1) {
         working.textContent = 'Loading scan context\u2026';
       } else {
-        let short = b;
-        while (short.startsWith('fix-')) short = short.slice(4);
-        working.textContent = 'Generating patches \u2014 ' + short + '\u2026';
+        let shortBranch = branchName;
+        while (shortBranch.startsWith('fix-')) shortBranch = shortBranch.slice(4);
+        working.textContent = 'Generating patches \u2014 ' + shortBranch + '\u2026';
       }
     } else {
       working.textContent = 'Starting fix agent\u2026';

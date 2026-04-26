@@ -70,23 +70,23 @@ interface Breakdown {
   thresholds: [string, number][];
 }
 
-function normalizeSeverity(s: string | null | undefined): string {
-  return (s || 'low').trim().toLowerCase();
+function normalizeSeverity(severityRaw: string | null | undefined): string {
+  return (severityRaw || 'low').trim().toLowerCase();
 }
 
 function cvssFor(finding: Finding): number {
   const raw = finding.cvss_base;
   if (raw !== undefined && raw !== null) {
-    const v = Number(raw);
-    if (v > 0 && v <= 10.0) return v;
+    const cvssValue = Number(raw);
+    if (cvssValue > 0 && cvssValue <= 10.0) return cvssValue;
   }
   return SEVERITY_DEFAULT_CVSS[normalizeSeverity(finding.severity)] || 0;
 }
 
 function inferExposureFromPath(location: string): string {
-  const p = (location || '').toLowerCase().replace(/\\/g, '/');
-  if (!p) return 'production';
-  const parts = p.split('/');
+  const normalizedPath = (location || '').toLowerCase().replace(/\\/g, '/');
+  if (!normalizedPath) return 'production';
+  const parts = normalizedPath.split('/');
   const name = parts[parts.length - 1] || '';
 
   if (parts.some(seg => ['tests', 'test', '__tests__', 'spec', 'specs', 'fixtures'].includes(seg))) return 'test';
@@ -124,14 +124,14 @@ function scoreFinding(finding: Finding): ScoreRow {
 
 function computeScore(findings: Finding[]): { score: number; grade: string } {
   let riskTotal = 0;
-  for (const f of findings) {
-    if (f.is_true_positive === false) continue;
-    riskTotal += scoreFinding(f).contribution;
+  for (const finding of findings) {
+    if (finding.is_true_positive === false) continue;
+    riskTotal += scoreFinding(finding).contribution;
   }
   const score = Math.max(0, Math.min(100, Math.round(100 - 2.0 * riskTotal)));
   let grade = 'F';
-  for (const [g, threshold] of GRADE_THRESHOLDS) {
-    if (riskTotal <= threshold) { grade = g; break; }
+  for (const [gradeLetter, riskThreshold] of GRADE_THRESHOLDS) {
+    if (riskTotal <= riskThreshold) { grade = gradeLetter; break; }
   }
   return { score, grade };
 }
@@ -141,10 +141,10 @@ function scoreBreakdown(findings: Finding[]): Breakdown {
   let riskTotal = 0;
   let counted = 0;
   let skippedLowConfidence = 0;
-  for (const f of findings) {
-    const s = scoreFinding(f);
-    rows.push(s);
-    if (s.counted) { riskTotal += s.contribution; counted++; }
+  for (const finding of findings) {
+    const scoreRow = scoreFinding(finding);
+    rows.push(scoreRow);
+    if (scoreRow.counted) { riskTotal += scoreRow.contribution; counted++; }
     else { skippedLowConfidence++; }
   }
   const { score, grade } = computeScore(findings);
@@ -180,10 +180,10 @@ const SEV_TITLES: Record<string, string> = {
 };
 
 function parseGitHubRepo(target: string): { owner: string; repo: string } | null {
-  const t = (target || '').trim();
-  const m = t.match(/github\.com[:/]([^/]+)\/([^/?#]+)/i);
-  if (!m) return null;
-  return { owner: m[1], repo: m[2].replace(/\.git$/i, '') };
+  const trimmedTarget = (target || '').trim();
+  const githubMatch = trimmedTarget.match(/github\.com[:/]([^/]+)\/([^/?#]+)/i);
+  if (!githubMatch) return null;
+  return { owner: githubMatch[1], repo: githubMatch[2].replace(/\.git$/i, '') };
 }
 
 function buildGitHubBlobUrl(
@@ -192,11 +192,11 @@ function buildGitHubBlobUrl(
   lineStart: number,
   lineEnd: number,
 ): string | null {
-  const p = parseGitHubRepo(target);
-  if (!p || !filePath) return null;
+  const repoParts = parseGitHubRepo(target);
+  if (!repoParts || !filePath) return null;
   const path = filePath.split('/').map(seg => encodeURIComponent(seg)).join('/');
   const hash = lineStart === lineEnd ? `L${lineStart}` : `L${lineStart}-L${lineEnd}`;
-  return `https://github.com/${p.owner}/${p.repo}/blob/HEAD/${path}#${hash}`;
+  return `https://github.com/${repoParts.owner}/${repoParts.repo}/blob/HEAD/${path}#${hash}`;
 }
 
 let _findings: Finding[] = [];

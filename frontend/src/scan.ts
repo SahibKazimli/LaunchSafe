@@ -28,15 +28,15 @@ document.getElementById('filter-bar')!.addEventListener('click', (e: Event) => {
   const btn = (e.target as HTMLElement).closest('.filter-chip') as HTMLElement | null;
   if (!btn) return;
   activeBranchFilter = btn.dataset.branch || 'all';
-  for (const c of document.querySelectorAll('.filter-chip')) {
-    c.classList.toggle('active', (c as HTMLElement).dataset.branch === activeBranchFilter);
+  for (const chip of document.querySelectorAll('.filter-chip')) {
+    chip.classList.toggle('active', (chip as HTMLElement).dataset.branch === activeBranchFilter);
   }
   rerenderEvents();
 });
 
 function tick() {
-  const s = Math.round((Date.now() - startedAt) / 1000);
-  document.getElementById('elapsed')!.textContent = s + 's';
+  const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
+  document.getElementById('elapsed')!.textContent = elapsedSeconds + 's';
 }
 
 function renderRecon(profile: {
@@ -60,8 +60,8 @@ function renderRecon(profile: {
     ['Auth', profile.has_auth], ['Payments', profile.has_payments],
     ['User PII', profile.has_user_data],
   ];
-  tags.innerHTML = flags.map(([l, on]) =>
-    `<span class="recon-tag ${on ? 'on' : ''}">${l}: ${on ? 'yes' : 'no'}</span>`
+  tags.innerHTML = flags.map(([label, enabled]) =>
+    `<span class="recon-tag ${enabled ? 'on' : ''}">${label}: ${enabled ? 'yes' : 'no'}</span>`
   ).join('');
 }
 
@@ -117,7 +117,7 @@ function renderEvents(events: ScanEvent[]) {
 }
 
 function renderBranches(branches: Record<string, BranchInfo>) {
-  const keys = Object.keys(branches || {}).filter(k => k !== 'recon');
+  const keys = Object.keys(branches || {}).filter(branchKey => branchKey !== 'recon');
   if (keys.length === 0) return;
   document.getElementById('branches-panel')!.style.display = 'block';
   const grid = document.getElementById('branches-grid')!;
@@ -125,21 +125,22 @@ function renderBranches(branches: Record<string, BranchInfo>) {
   let runningCount = 0, doneCount = 0;
   const order = ['payments', 'iac', 'auth', 'cicd', 'general', 'synthesize'];
   const sorted = [...keys].sort(
-    (a, b) => (order.indexOf(a) === -1 ? 99 : order.indexOf(a))
-            - (order.indexOf(b) === -1 ? 99 : order.indexOf(b))
+    (leftKey, rightKey) =>
+      (order.indexOf(leftKey) === -1 ? 99 : order.indexOf(leftKey))
+      - (order.indexOf(rightKey) === -1 ? 99 : order.indexOf(rightKey))
   );
   for (const name of sorted) {
-    const b = branches[name];
-    if (b.status === 'running') runningCount++;
-    if (b.status === 'done') doneCount++;
+    const branchInfo = branches[name];
+    if (branchInfo.status === 'running') runningCount++;
+    if (branchInfo.status === 'done') doneCount++;
     const card = document.createElement('div');
-    card.className = `branch-card b-${b.status || 'pending'}`;
-    const tools = b.tool_calls || 0;
-    const findings = b.count || 0;
+    card.className = `branch-card b-${branchInfo.status || 'pending'}`;
+    const tools = branchInfo.tool_calls || 0;
+    const findings = branchInfo.count || 0;
     const meta =
-      b.status === 'done'
+      branchInfo.status === 'done'
         ? `${findings} finding${findings !== 1 ? 's' : ''} \u00b7 ${tools} call${tools !== 1 ? 's' : ''}`
-        : b.status === 'running'
+        : branchInfo.status === 'running'
           ? `${tools} call${tools !== 1 ? 's' : ''} so far`
           : 'pending';
     card.innerHTML =
@@ -187,9 +188,12 @@ async function poll() {
   if (data.status === 'running') {
     const branches = data.branches || {};
     const total = Object.keys(branches).length;
-    const running = Object.values(branches).filter(b => b.status === 'running').length;
-    const done = Object.values(branches).filter(b => b.status === 'done').length;
-    const totalCalls = Object.values(branches).reduce((a, b) => a + (b.tool_calls || 0), 0);
+    const running = Object.values(branches).filter(branchInfo => branchInfo.status === 'running').length;
+    const done = Object.values(branches).filter(branchInfo => branchInfo.status === 'done').length;
+    const totalCalls = Object.values(branches).reduce(
+      (sum, branchInfo) => sum + (branchInfo.tool_calls || 0),
+      0,
+    );
     if (!data.repo_profile) {
       working.textContent = 'Recon agent exploring the repo\u2026';
     } else if (total === 0) {

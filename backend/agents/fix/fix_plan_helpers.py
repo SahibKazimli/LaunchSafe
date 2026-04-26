@@ -8,6 +8,7 @@ LangGraph node implementations.
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from typing import Any
 
@@ -46,6 +47,61 @@ _MANIFEST_BASENAMES: frozenset[str] = frozenset(
         "pom.xml",
     )
 )
+
+
+def slugify_title_for_group_id(title: str, fallback_index: int) -> str:
+    """Stable kebab-case id from a finding title (for ``FixGroup.group_id``)."""
+    raw = (title or "").strip().lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
+    slug = re.sub(r"-{2,}", "-", slug)
+    slug = slug[:56] if slug else ""
+    return slug if slug else f"finding-{fallback_index}"
+
+
+def ensure_fix_group_metadata(groups: list[dict], findings: list[dict]) -> None:
+    """Fill missing ``label`` / ``group_id`` and replace generic ``fix-N`` ids with title slugs."""
+    used: set[str] = set()
+
+    def _first_title(indices: list[Any]) -> str:
+        for raw_idx in indices:
+            if not isinstance(raw_idx, int):
+                continue
+            if 0 <= raw_idx < len(findings) and isinstance(findings[raw_idx], dict):
+                t = str(findings[raw_idx].get("title") or "").strip()
+                if t:
+                    return t
+        return ""
+
+    for i, g in enumerate(groups or []):
+        if not isinstance(g, dict):
+            continue
+        indices = [x for x in (g.get("finding_indices") or []) if isinstance(x, int)]
+        first_title = _first_title(indices)
+        label = (g.get("label") or "").strip()
+        if not label and first_title:
+            g["label"] = first_title[:220]
+            label = g["label"]
+        gid = (g.get("group_id") or "").strip()
+        generic = bool(re.fullmatch(r"fix-\d+", gid))
+        if (not gid or generic) and (label or first_title):
+            base = slugify_title_for_group_id(label or first_title, i)
+            new_id = base
+            suffix = 1
+            while new_id in used:
+                new_id = f"{base}-d{suffix}"
+                suffix += 1
+            g["group_id"] = new_id
+            gid = new_id
+        elif not gid:
+            base = slugify_title_for_group_id(f"group-{i}", i)
+            new_id = base
+            suffix = 1
+            while new_id in used:
+                new_id = f"{base}-d{suffix}"
+                suffix += 1
+            g["group_id"] = new_id
+            gid = new_id
+        used.add(gid)
 
 
 def file_key_basename(file_key: str) -> str:
@@ -287,37 +343,26 @@ def coerce_findings_into_groups(
         kind, path = bucket_key
         for chunk_start in range(0, len(index_list), max_per_group):
             chunk = index_list[chunk_start : chunk_start + max_per_group]
-            if kind == "unres":
-                base_slug = "nolocation"
-            else:
-                base_slug = file_key_basename(path) or (path.split("/")[-1] if path else "group")
-            prefix = "dep" if kind == "dep" else ("fix" if kind == "code" else "unres")
-            slug = "".join(
-                character if character.isalnum() else ("-" if character in "./\\" else "")
-                for character in base_slug
-            )
-            while "--" in slug:
-                slug = slug.replace("--", "-")
-            slug = (slug.strip("-")[:40] or "file").lower()
             chunk_num = 1 + chunk_start // max_per_group
-            if chunk_num == 1:
-                base_group_id = f"{prefix}-{slug}"
+            first_finding = (
+                findings[chunk[0]] if chunk and isinstance(findings[chunk[0]], dict) else {}
+            )
+            title = str(first_finding.get("title") or "security fix").strip()
+            title_slug = slugify_title_for_group_id(title, chunk[0])
+            if chunk_num > 1:
+                base_group_id = f"{title_slug}-part{chunk_num}"
             else:
-                base_group_id = f"{prefix}-{slug}-{chunk_num}"
+                base_group_id = title_slug
             group_id = base_group_id
             duplicate = 0
             while group_id in used_group_ids:
                 duplicate += 1
                 group_id = f"{base_group_id}-d{duplicate}"
             used_group_ids.add(group_id)
-            first_finding = (
-                findings[chunk[0]] if chunk and isinstance(findings[chunk[0]], dict) else {}
-            )
-            title = (first_finding.get("title") or "security fix")[:60]
             groups.append(
                 {
                     "group_id": group_id,
-                    "label": title,
+                    "label": (title or "security fix")[:220],
                     "finding_indices": chunk,
                     "target_files": [],
                     "risk_level": risk_level_for_finding_indices(findings, chunk),

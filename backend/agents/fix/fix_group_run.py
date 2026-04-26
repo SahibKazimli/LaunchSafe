@@ -116,16 +116,19 @@ async def run_single_group_patches(
     for path in target_keys:
         matched_path, content = find_file_content(path, files)
         if content:
-            cap = FIX_PATCH_FILE_PROMPT_MAX_CHARS
+            max_excerpt_chars = FIX_PATCH_FILE_PROMPT_MAX_CHARS
             if file_has_medium_plus_finding(matched_path, excerpt_findings, files):
-                cap = min(max(cap, len(content) + 64), FIX_PATCH_FILE_PROMPT_MAX_CHARS)
+                max_excerpt_chars = min(
+                    max(max_excerpt_chars, len(content) + 64),
+                    FIX_PATCH_FILE_PROMPT_MAX_CHARS,
+                )
             file_sections.append(
                 build_excerpt_for_fix_prompt(
                     matched_path,
                     content,
                     excerpt_findings,
                     files,
-                    full_file_max_chars=cap,
+                    full_file_max_chars=max_excerpt_chars,
                     line_margin=FIX_PATCH_LINE_MARGIN,
                     narrow_to_cited_region=should_narrow_excerpt_for_fix(
                         matched_path, content, excerpt_findings, files
@@ -464,7 +467,9 @@ async def run_single_group_patches(
                     f"they removed return/raise or HTTPException handling without a safe replacement."
                 ).strip()
 
-        changed_paths = sorted({p.path for p in file_patches if p.path})
+        changed_paths = sorted(
+            {file_patch.path for file_patch in file_patches if file_patch.path}
+        )
 
         result = PatchResult(
             group_id=group_id,

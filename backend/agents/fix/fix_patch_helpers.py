@@ -272,9 +272,9 @@ _REQ_PIN_EQ = re.compile(
 def _pins_eq_map(block: str) -> dict[str, str]:
     pins: dict[str, str] = {}
     for line in (block or "").splitlines():
-        mo = _REQ_PIN_EQ.match(line)
-        if mo:
-            pins[mo.group(1).lower().replace("_", "-")] = mo.group(2).strip()
+        pin_match = _REQ_PIN_EQ.match(line)
+        if pin_match:
+            pins[pin_match.group(1).lower().replace("_", "-")] = pin_match.group(2).strip()
     return pins
 
 
@@ -347,36 +347,42 @@ def patch_looks_incomplete_or_truncated(patch: dict) -> bool:
 
 def _py_line_starts_with(text: str, kind: str) -> int:
     """Count logical ``return`` / ``raise`` lines (Python-ish heuristic)."""
-    n = 0
+    count = 0
     for line in (text or "").splitlines():
-        s = line.strip()
-        if not s or s.startswith("#"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
             continue
-        if kind == "return" and (s.startswith("return ") or s == "return"):
-            n += 1
-        elif kind == "raise" and s.startswith("raise "):
-            n += 1
-    return n
+        if kind == "return" and (stripped.startswith("return ") or stripped == "return"):
+            count += 1
+        elif kind == "raise" and stripped.startswith("raise "):
+            count += 1
+    return count
 
 
 def patch_fails_sanity_gate(original: str, patched: str) -> bool:
     """True if the edit likely drops error handling or returns (unsafe to apply)."""
-    o, p = original or "", patched or ""
-    r0, r1 = _py_line_starts_with(o, "return"), _py_line_starts_with(p, "return")
-    x0, x1 = _py_line_starts_with(o, "raise"), _py_line_starts_with(p, "raise")
-    if r0 >= 1 and r1 < r0:
-        if x1 < x0:
+    original_text, patched_text = original or "", patched or ""
+    orig_return_count = _py_line_starts_with(original_text, "return")
+    patched_return_count = _py_line_starts_with(patched_text, "return")
+    orig_raise_count = _py_line_starts_with(original_text, "raise")
+    patched_raise_count = _py_line_starts_with(patched_text, "raise")
+    if orig_return_count >= 1 and patched_return_count < orig_return_count:
+        if patched_raise_count < orig_raise_count:
             return True
-        if "HTTPException" in o and "HTTPException" not in p:
+        if "HTTPException" in original_text and "HTTPException" not in patched_text:
             return True
-    if "HTTPException" in o and "HTTPException" not in p and x1 < x0:
+    if (
+        "HTTPException" in original_text
+        and "HTTPException" not in patched_text
+        and patched_raise_count < orig_raise_count
+    ):
         return True
     return False
 
 
 def _patch_adds_security_controls(patched: str) -> bool:
     """Heuristic: authz / HTTP error paths / current user checks (reduces bogus warnings)."""
-    p = (patched or "").lower()
+    patched_lower = (patched or "").lower()
     needles = (
         "get_current_user",
         "current_user",
@@ -393,7 +399,7 @@ def _patch_adds_security_controls(patched: str) -> bool:
         "content-security-policy",
         "csp",
     )
-    return any(n in p for n in needles)
+    return any(needle in patched_lower for needle in needles)
 
 
 def patch_sanity_warnings(original: str, patched: str) -> list[str]:
@@ -402,17 +408,23 @@ def patch_sanity_warnings(original: str, patched: str) -> list[str]:
         return []
     uplift = _patch_adds_security_controls(patched)
     w: list[str] = []
-    o, p = original or "", patched or ""
-    if _py_line_starts_with(o, "raise") > _py_line_starts_with(p, "raise"):
+    original_text, patched_text = original or "", patched or ""
+    if _py_line_starts_with(original_text, "raise") > _py_line_starts_with(
+        patched_text, "raise"
+    ):
         if not uplift:
             w.append("Fewer raise statements than before — verify error handling.")
-    r_drop = _py_line_starts_with(o, "return") - _py_line_starts_with(p, "return")
+    return_drop = _py_line_starts_with(original_text, "return") - _py_line_starts_with(
+        patched_text, "return"
+    )
     if not uplift:
-        if r_drop >= 2:
+        if return_drop >= 2:
             w.append("Several return statements removed — verify all paths still return.")
-        elif r_drop == 1 and _py_line_starts_with(o, "raise") > _py_line_starts_with(p, "raise"):
+        elif return_drop == 1 and _py_line_starts_with(original_text, "raise") > _py_line_starts_with(
+            patched_text, "raise"
+        ):
             w.append("Fewer return and raise statements — verify control flow and errors.")
-    if "HTTPException" in o and "HTTPException" not in p:
+    if "HTTPException" in original_text and "HTTPException" not in patched_text:
         w.append("HTTPException references removed — ensure API errors are still explicit.")
     return w
 
@@ -425,15 +437,17 @@ def patch_dict_is_substantive(patch: dict) -> bool:
 
 
 def _py_snippet_diff_is_comment_lines_only(original: str, patched: str) -> bool:
-    o_lines, p_lines = original.splitlines(), patched.splitlines()
-    if len(o_lines) != len(p_lines):
+    original_lines, patched_lines = original.splitlines(), patched.splitlines()
+    if len(original_lines) != len(patched_lines):
         return False
     any_diff = False
-    for ol, pl in zip(o_lines, p_lines):
-        if ol == pl:
+    for original_line, patched_line in zip(original_lines, patched_lines):
+        if original_line == patched_line:
             continue
         any_diff = True
-        if not (ol.lstrip().startswith("#") and pl.lstrip().startswith("#")):
+        if not (
+            original_line.lstrip().startswith("#") and patched_line.lstrip().startswith("#")
+        ):
             return False
     return any_diff
 
@@ -449,15 +463,17 @@ def _c_js_snippet_diff_is_comment_lines_only(original: str, patched: str) -> boo
             return True
         return False
 
-    o_lines, p_lines = original.splitlines(), patched.splitlines()
-    if len(o_lines) != len(p_lines):
+    original_lines, patched_lines = original.splitlines(), patched.splitlines()
+    if len(original_lines) != len(patched_lines):
         return False
     any_diff = False
-    for ol, pl in zip(o_lines, p_lines):
-        if ol == pl:
+    for original_line, patched_line in zip(original_lines, patched_lines):
+        if original_line == patched_line:
             continue
         any_diff = True
-        if not (is_full_line_comment(ol) and is_full_line_comment(pl)):
+        if not (
+            is_full_line_comment(original_line) and is_full_line_comment(patched_line)
+        ):
             return False
     return any_diff
 
@@ -511,7 +527,7 @@ def resolve_locate_items(
         resolved = resolve_row_to_verified_snippet(row, file_content)
         if not resolved:
             continue
-        verified, res_conf = resolved
+        verified, resolve_confidence = resolved
         if not original_snippet_in_file(verified, file_content):
             continue
         dedup_key = (matched_key or path, verified)
@@ -519,9 +535,9 @@ def resolve_locate_items(
             continue
         seen.add(dedup_key)
         out.append((matched_key or path, verified))
-        model_c = float(row.confidence) if row.confidence is not None else 0.75
-        merged = min(1.0, 0.5 * model_c + 0.5 * res_conf)
-        confidences.append(merged)
+        model_confidence = float(row.confidence) if row.confidence is not None else 0.75
+        merged_confidence = min(1.0, 0.5 * model_confidence + 0.5 * resolve_confidence)
+        confidences.append(merged_confidence)
     return out, confidences
 
 
@@ -577,10 +593,10 @@ def merge_edits_to_file_patches(
             had_truncation_reject = True
             continue
         warnings = list(patch_sanity_warnings(original_snippet, patched))
-        occ = file_content.count(original_snippet)
-        if occ > 1:
+        match_count = file_content.count(original_snippet)
+        if match_count > 1:
             warnings.append(
-                f"This snippet matched {occ} times in the file — only the first was replaced; "
+                f"This snippet matched {match_count} times in the file — only the first was replaced; "
                 "verify the correct location."
             )
         file_patches.append(

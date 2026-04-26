@@ -410,13 +410,15 @@ async def review_patches_node(state: dict[str, Any]) -> dict[str, Any]:
 
     review_dict = review.model_dump()
     sanity_bullets: list[str] = []
-    for pr in patch_results:
-        heading = (pr.get("group_label") or "").strip() or str(pr.get("group_id", ""))
-        for p in pr.get("patches") or []:
-            if not isinstance(p, dict):
+    for group_result in patch_results:
+        heading = (group_result.get("group_label") or "").strip() or str(
+            group_result.get("group_id", "")
+        )
+        for patch_dict in group_result.get("patches") or []:
+            if not isinstance(patch_dict, dict):
                 continue
-            for w in p.get("sanity_warnings") or []:
-                sanity_bullets.append(f"[{heading}] {p.get('path')}: {w}")
+            for warning in patch_dict.get("sanity_warnings") or []:
+                sanity_bullets.append(f"[{heading}] {patch_dict.get('path')}: {warning}")
     if sanity_bullets:
         merged_w = sanity_bullets + list(review_dict.get("warnings") or [])
         review_dict["warnings"] = merged_w

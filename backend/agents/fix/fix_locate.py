@@ -17,15 +17,15 @@ def _norm_crlf(s: str) -> str:
     return (s or "").replace("\r\n", "\n")
 
 
-def _similar_line(a: str, b: str) -> float:
-    a, b = a.strip(), b.strip()
-    if not a or not b:
+def _similar_line(line_a: str, line_b: str) -> float:
+    line_a, line_b = line_a.strip(), line_b.strip()
+    if not line_a or not line_b:
         return 0.0
-    if a == b:
+    if line_a == line_b:
         return 1.0
-    if a in b or b in a:
+    if line_a in line_b or line_b in line_a:
         return 0.92
-    return SequenceMatcher(None, a, b).ratio()
+    return SequenceMatcher(None, line_a, line_b).ratio()
 
 
 def parse_http_route_hint(route_hint: str) -> tuple[str, str]:
@@ -67,42 +67,42 @@ def extract_python_def_block(content: str, name: str) -> str | None:
     lines = _norm_crlf(content).splitlines(True)
     pat = re.compile(rf"^(\s*)(async\s+)?def\s+{re.escape(name.strip())}\b")
     def_idx: int | None = None
-    for i, line in enumerate(lines):
+    for line_index, line in enumerate(lines):
         if pat.match(line):
-            def_idx = i
+            def_idx = line_index
             break
     if def_idx is None:
         return None
     # Walk up to include decorators
     start = def_idx
-    j = def_idx - 1
-    while j >= 0:
-        prev = lines[j]
+    prev_line_index = def_idx - 1
+    while prev_line_index >= 0:
+        prev = lines[prev_line_index]
         stripped = prev.lstrip()
         if stripped.startswith("@"):
-            start = j
-            j -= 1
+            start = prev_line_index
+            prev_line_index -= 1
             continue
         if not prev.strip() or stripped.startswith("#"):
-            j -= 1
+            prev_line_index -= 1
             continue
         break
     base_line = lines[def_idx]
     indent_match = re.match(r"^(\s*)", base_line)
     base_indent = len(indent_match.group(1).expandtabs()) if indent_match else 0
     block: list[str] = lines[start : def_idx + 1]
-    for k in range(def_idx + 1, len(lines)):
-        ln = lines[k]
-        if not ln.strip():
-            block.append(ln)
+    for line_idx in range(def_idx + 1, len(lines)):
+        line = lines[line_idx]
+        if not line.strip():
+            block.append(line)
             continue
-        if ln.lstrip().startswith("#"):
-            block.append(ln)
+        if line.lstrip().startswith("#"):
+            block.append(line)
             continue
-        cur_m = re.match(r"^(\s*)", ln)
-        cur_indent = len(cur_m.group(1).expandtabs()) if cur_m else 0
+        cur_indent_match = re.match(r"^(\s*)", line)
+        cur_indent = len(cur_indent_match.group(1).expandtabs()) if cur_indent_match else 0
         if cur_indent > base_indent:
-            block.append(ln)
+            block.append(line)
             continue
         break
     text = "".join(block).strip("\n")
@@ -117,35 +117,35 @@ def expand_route_match_to_handler_block(content: str, match_start: int) -> str |
     line_no = text.count("\n", 0, match_start)
     lines = text.splitlines(True)
     # Walk up to first @ starting a small window
-    i = line_no
-    while i > 0 and lines[i - 1].lstrip().startswith("#"):
-        i -= 1
-    while i > 0:
-        prev = lines[i - 1]
+    decorator_start_idx = line_no
+    while decorator_start_idx > 0 and lines[decorator_start_idx - 1].lstrip().startswith("#"):
+        decorator_start_idx -= 1
+    while decorator_start_idx > 0:
+        prev = lines[decorator_start_idx - 1]
         if prev.lstrip().startswith("@"):
-            i -= 1
+            decorator_start_idx -= 1
             continue
         if not prev.strip():
-            i -= 1
+            decorator_start_idx -= 1
             continue
         break
     # Find following def
     def_idx: int | None = None
-    for j in range(line_no, len(lines)):
-        if re.match(r"^\s*(async\s+)?def\s+\w+\b", lines[j]):
-            def_idx = j
+    for scan_line_idx in range(line_no, len(lines)):
+        if re.match(r"^\s*(async\s+)?def\s+\w+\b", lines[scan_line_idx]):
+            def_idx = scan_line_idx
             break
     if def_idx is None:
         # fall back: several lines from match line
         chunk = "".join(lines[max(0, line_no - 2) : min(len(lines), line_no + 25)])
         return chunk.strip() or None
-    name_m = re.match(r"^\s*(async\s+)?def\s+(\w+)\b", lines[def_idx])
-    sym = name_m.group(2) if name_m else ""
-    if sym:
-        whole = extract_python_def_block(text, sym)
+    name_match = re.match(r"^\s*(async\s+)?def\s+(\w+)\b", lines[def_idx])
+    symbol_name = name_match.group(2) if name_match else ""
+    if symbol_name:
+        whole = extract_python_def_block(text, symbol_name)
         if whole:
             return whole
-    return "".join(lines[i : def_idx + 25]).strip() or None
+    return "".join(lines[decorator_start_idx : def_idx + 25]).strip() or None
 
 
 def span_for_route_hint(content: str, route_hint: str) -> str | None:
@@ -156,10 +156,10 @@ def span_for_route_hint(content: str, route_hint: str) -> str | None:
     needles = _path_needles_for_search(path_lower)
     text = _norm_crlf(content)
     lowered = text.lower()
-    for nd in needles:
-        if not nd:
+    for needle in needles:
+        if not needle:
             continue
-        pos = lowered.find(nd.lower())
+        pos = lowered.find(needle.lower())
         if pos < 0:
             continue
         block = expand_route_match_to_handler_block(text, pos)
@@ -173,11 +173,11 @@ def span_for_route_hint(content: str, route_hint: str) -> str | None:
         rf"['\"]{re.escape(path_lower)}['\"]",
     ]
     for pat in patterns:
-        m = re.search(pat, text, re.IGNORECASE)
-        if m:
-            b = expand_route_match_to_handler_block(text, m.start())
-            if b:
-                return b
+        regex_match = re.search(pat, text, re.IGNORECASE)
+        if regex_match:
+            expanded_block = expand_route_match_to_handler_block(text, regex_match.start())
+            if expanded_block:
+                return expanded_block
     return None
 
 
@@ -190,25 +190,28 @@ def fuzzy_resolve_snippet(proposed: str, content: str, min_line_ratio: float = 0
     file_lines = _norm_crlf(content).splitlines()
     best_span: tuple[int, int] | None = None
     best_score = 0
-    for i in range(len(file_lines)):
-        if _similar_line(file_lines[i], prop_lines[0]) < min_line_ratio:
+    for window_start in range(len(file_lines)):
+        if _similar_line(file_lines[window_start], prop_lines[0]) < min_line_ratio:
             continue
-        pi = 0
-        j = i
+        prop_line_index = 0
+        file_line_index = window_start
         matched = 0
-        while pi < len(prop_lines) and j < len(file_lines):
-            if _similar_line(file_lines[j], prop_lines[pi]) >= min_line_ratio:
+        while prop_line_index < len(prop_lines) and file_line_index < len(file_lines):
+            if (
+                _similar_line(file_lines[file_line_index], prop_lines[prop_line_index])
+                >= min_line_ratio
+            ):
                 matched += 1
-                pi += 1
-            j += 1
+                prop_line_index += 1
+            file_line_index += 1
         need = max(2, (len(prop_lines) + 1) // 2)
         if matched >= need and matched > best_score:
             best_score = matched
-            best_span = (i, j)
+            best_span = (window_start, file_line_index)
     if best_span is None:
         return None
-    lo, hi = best_span
-    return "\n".join(file_lines[lo:hi])
+    span_start, span_end = best_span
+    return "\n".join(file_lines[span_start:span_end])
 
 
 def resolve_row_to_verified_snippet(
@@ -221,8 +224,8 @@ def resolve_row_to_verified_snippet(
     if proposed.strip() and proposed in content:
         return proposed, 1.0
 
-    for sym in row.anchor_symbols or []:
-        block = extract_python_def_block(content, sym.strip())
+    for anchor_symbol in row.anchor_symbols or []:
+        block = extract_python_def_block(content, anchor_symbol.strip())
         if block:
             return block, 0.88
 
@@ -249,20 +252,20 @@ def repo_wide_search_evidence(
     hits: list[str] = []
     seen: set[tuple[str, int]] = set()
     for needle in needles:
-        n = (needle or "").strip()
-        if len(n) < 2:
+        needle_trimmed = (needle or "").strip()
+        if len(needle_trimmed) < 2:
             continue
-        nl = n.lower()
+        needle_lower = needle_trimmed.lower()
         for path, body in sorted(files.items()):
-            if nl not in _norm_crlf(body).lower():
+            if needle_lower not in _norm_crlf(body).lower():
                 continue
-            for i, line in enumerate(_norm_crlf(body).splitlines(), 1):
-                if nl in line.lower():
-                    key = (path, i)
-                    if key in seen:
+            for line_number, line in enumerate(_norm_crlf(body).splitlines(), 1):
+                if needle_lower in line.lower():
+                    path_line_key = (path, line_number)
+                    if path_line_key in seen:
                         continue
-                    seen.add(key)
-                    hits.append(f"{path}:{i}: {line.strip()[:240]}")
+                    seen.add(path_line_key)
+                    hits.append(f"{path}:{line_number}: {line.strip()[:240]}")
                     if len(hits) >= max_lines:
                         return "\n".join(hits)
     if not hits:
@@ -281,22 +284,27 @@ def collect_evidence_needles_from_findings(findings: list[dict[str, Any]]) -> li
             if raw and raw.lower() not in ("unknown", "?", "n/a", "none"):
                 needles.append(raw.split(":")[0].strip())
         blob = " ".join(
-            str(finding.get(k) or "") for k in ("title", "description", "fix")
+            str(finding.get(field_name) or "")
+            for field_name in ("title", "description", "fix")
         )
-        for m in re.finditer(r"(?:GET|POST|PUT|PATCH|DELETE|HEAD)\s+(/\S+)", blob, re.I):
-            needles.append(m.group(0).strip())
-        for m in re.finditer(r"['\"](/[a-zA-Z0-9_\-/{}\.]+)['\"]", blob):
-            needles.append(m.group(1))
-        for m in re.finditer(r"\b(def|async def)\s+([a-zA-Z_][a-zA-Z0-9_]*)\b", blob):
-            needles.append(m.group(2))
+        for route_match in re.finditer(
+            r"(?:GET|POST|PUT|PATCH|DELETE|HEAD)\s+(/\S+)", blob, re.I
+        ):
+            needles.append(route_match.group(0).strip())
+        for path_match in re.finditer(r"['\"](/[a-zA-Z0-9_\-/{}\.]+)['\"]", blob):
+            needles.append(path_match.group(1))
+        for def_match in re.finditer(
+            r"\b(def|async def)\s+([a-zA-Z_][a-zA-Z0-9_]*)\b", blob
+        ):
+            needles.append(def_match.group(2))
     seen: set[str] = set()
     out: list[str] = []
-    for n in needles:
-        s = n.strip()
-        if len(s) < 2 or s.lower() in seen:
+    for needle_candidate in needles:
+        trimmed = needle_candidate.strip()
+        if len(trimmed) < 2 or trimmed.lower() in seen:
             continue
-        seen.add(s.lower())
-        out.append(s)
+        seen.add(trimmed.lower())
+        out.append(trimmed)
         if len(out) >= 48:
             break
     return out

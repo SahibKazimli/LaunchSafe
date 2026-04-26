@@ -10,9 +10,17 @@ from operator import add
 from typing import Annotated, Any, TypedDict
 
 from pydantic import BaseModel, Field
+from langgraph.prebuilt.chat_agent_executor import AgentState
 
 
 # ── Pydantic models (structured LLM output) ──────────────────────────
+
+
+class FixPatchReactState(AgentState):
+    """State for the fix-phase ReAct patch agent (tools read from ``files``)."""
+
+    files: dict[str, str]
+    structured_response: Any
 
 
 class FilePatch(BaseModel):
@@ -42,14 +50,44 @@ class FilePatch(BaseModel):
         default="",
         description="One sentence: what was changed and why it fixes the issue.",
     )
+    sanity_warnings: list[str] = Field(
+        default_factory=list,
+        description="Heuristic review hints (non-fatal); fatal issues reject the patch.",
+    )
 
 
 class PatchLocateRow(BaseModel):
-    """Step 1 — identify an exact region to replace (no patched code yet)."""
+    """Step 1 — identify a region to replace (no patched code yet).
+
+    The model may propose ``original_snippet`` from the excerpt; the server
+    **resolves** it to a verified substring of the full file using anchors
+    and fuzzy alignment when the excerpt drifts from the ingested file.
+    """
 
     path: str = Field(description="Repo path matching an ### heading in ORIGINAL FILES")
     original_snippet: str = Field(
-        description="Exact contiguous copy from ORIGINAL FILES; must be a verbatim substring.",
+        description=(
+            "Contiguous code to change — prefer copy from ORIGINAL FILES; "
+            "if line numbers are stale, paste the closest matching block you see "
+            "and set anchor_route / anchor_symbols so the server can align."
+        ),
+    )
+    anchor_route: str = Field(
+        default="",
+        description=(
+            "Optional HTTP route, e.g. `GET /users/{user_id}` or `/search/chunks`, "
+            "to locate the real handler when citations are wrong."
+        ),
+    )
+    anchor_symbols: list[str] = Field(
+        default_factory=list,
+        description="Optional Python function or method names tied to the vulnerable code.",
+    )
+    confidence: float = Field(
+        default=0.75,
+        ge=0.0,
+        le=1.0,
+        description="Your confidence that this anchor maps to the finding (0–1).",
     )
 
 
@@ -78,6 +116,24 @@ class PatchEditBundle(BaseModel):
 
     edits: list[PatchEditRow] = Field(default_factory=list)
     notes: str = Field(default="", description="Caveats or indices you could not patch.")
+    controls_added: str = Field(
+        default="",
+        description=(
+            "Security controls added (ownership checks, auth deps, deny-by-default, etc.). "
+            "One short paragraph; 'none' only if truly not applicable."
+        ),
+    )
+    tests_touched: str = Field(
+        default="",
+        description=(
+            "Tests or policy assertions to add or update. Name files or describe assertions; "
+            "'none' if the repo snapshot has no test layout."
+        ),
+    )
+    residual_risk: str = Field(
+        default="",
+        description="What may still be risky after this patch (one or two sentences).",
+    )
 
 
 class FixGroup(BaseModel):
@@ -142,10 +198,32 @@ class PatchResult(BaseModel):
     """Output of one fix worker — patches for one group (after validation + diffs)."""
 
     group_id: str
+    group_label: str = Field(
+        default="",
+        description="Human-readable title from the fix plan (UI heading).",
+    )
     patches: list[FilePatch] = Field(default_factory=list)
     notes: str = Field(
         default="",
         description="What was changed and any caveats.",
+    )
+    controls_added: str = Field(default="", description="Structured remediation: controls.")
+    tests_touched: str = Field(default="", description="Structured remediation: tests/policy.")
+    residual_risk: str = Field(default="", description="Structured remediation: residual risk.")
+    changed_paths: list[str] = Field(
+        default_factory=list,
+        description="Distinct repo paths touched by validated patches in this group.",
+    )
+    search_evidence: str = Field(
+        default="",
+        description=(
+            "Repo-wide search hits (path:line) when patches are empty — supports "
+            "quality gates and no-op justification."
+        ),
+    )
+    locate_confidences: list[float] = Field(
+        default_factory=list,
+        description="Per locate-target confidence after server-side resolution (0–1).",
     )
 
 

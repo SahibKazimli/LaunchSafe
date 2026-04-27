@@ -57,6 +57,41 @@ Sub-agents stream **think → tool → result** style events to the UI over `/sc
 
 ## Fix mode (patch proposals)
 
+### Architecture (fix mode)
+
+```
+FastAPI (backend/main.py)
+/start-fix  /fix-status  /fix-patches  /fix/<id>
+        │
+        ▼
+fix_orchestrator  (async; fix_store + merge_scan_files_for_fix)
+        │
+        ▼
+ Fix LangGraph (agents/fix/fix_graph.py)
+        │
+     ┌──┴──┐
+     │load │  ← findings subset + merged repo snapshot
+     └──┬──┘
+        │
+        ▼
+     ┌──┴──┐
+     │plan │  ← LLM FixPlan: groups, execution_order
+     └──┬──┘
+        │
+        ▼
+generate_patches  (parallel FixGroups, concurrency cap)
+ ┌──────┬──────┬──────┐
+ ▼      ▼      ▼      ▼
+ G1     G2     G3     …     ← locate; ReAct tools; legacy excerpt fallback
+ └──────┴──────┴──────┘
+        │
+        ▼
+review_patches  ← optional batch review LLM
+        │
+        ▼
+quality gates + patches ready  (fix_validators; events → /fix-status)
+```
+
 From the report UI you can start a **fix session** (`/start-fix` → `/fix/<id>`). A separate LangGraph run:
 
 1. **Plan** — batches findings into groups (per file / limits on group size).

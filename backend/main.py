@@ -38,10 +38,10 @@ app = FastAPI(title="LaunchSafe")
 _gemini_key = os.environ.get("GEMINI_API_KEY", "")
 _anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
 
-# Log the **active** provider from the configured model, not "whichever key exists first".
+# Log the active provider from the configured model
 try:
     from core.config import LLM_MODEL
-except Exception:  # noqa: BLE001
+except Exception:  
     LLM_MODEL = os.environ.get("LAUNCHSAFE_LLM_MODEL", "claude-sonnet-4-6")
 
 _m = (LLM_MODEL or "").lower()

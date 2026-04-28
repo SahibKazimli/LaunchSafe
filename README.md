@@ -6,6 +6,8 @@ Optional **Fix mode** proposes concrete patches: semantic locate → **tool-grou
 
 **Expect several minutes per full scan** (often ~3–10 minutes depending on repo size and LLM limits).
 
+**URL** https://launchsafe-851230900226.europe-north2.run.app
+
 ## Web UI
 
 Landing page — paste a public GitHub URL (or upload a zip from the same flow) to run a full audit:

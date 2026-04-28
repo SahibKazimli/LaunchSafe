@@ -33,3 +33,7 @@ coverage.xml
 dist/
 build/
 *.egg-info/
+
+# Frontend — built in Docker; ignore host node_modules / dist
+frontend/node_modules/
+frontend/dist/

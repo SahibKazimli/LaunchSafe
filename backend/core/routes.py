@@ -12,7 +12,7 @@ import tempfile
 import uuid
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
@@ -24,8 +24,14 @@ from core import scan_store as _ss
 _HERE = Path(__file__).resolve().parent          # backend/core/
 _BACKEND = _HERE.parent                          # backend/
 _FRONTEND = (_BACKEND.parent / "frontend").resolve()
+_FRONTEND_DIST = (_FRONTEND / "dist").resolve()
 
 templates = Jinja2Templates(directory=str(_FRONTEND))
+
+
+def _dist_page(name: str) -> FileResponse | None:
+    path = _FRONTEND_DIST / name
+    return FileResponse(path) if path.is_file() else None
 
 router = APIRouter()
 
@@ -33,6 +39,9 @@ router = APIRouter()
 # Pages
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request):
+    built = _dist_page("index.html")
+    if built is not None:
+        return built
     return templates.TemplateResponse(request, "index.html")
 
 
@@ -40,6 +49,9 @@ async def index(request: Request):
 async def scan_page(request: Request, scan_id: str):
     if not _ss.exists(scan_id):
         return HTMLResponse("Scan not found", status_code=404)
+    built = _dist_page("scan.html")
+    if built is not None:
+        return built
     return templates.TemplateResponse(request, "scan.html", {"scan_id": scan_id})
 
 
@@ -48,6 +60,10 @@ async def report_page(request: Request, scan_id: str):
     scan = _ss.get_scan(scan_id)
     if not scan or scan["status"] != "done":
         return HTMLResponse("Report not ready", status_code=404)
+
+    built = _dist_page("report.html")
+    if built is not None:
+        return built
 
     findings = scan["findings"]
     counts = {
@@ -243,6 +259,9 @@ async def fix_patches(fix_id: str):
 async def fix_page(request: Request, fix_id: str):
     if not _fs.exists(fix_id):
         return HTMLResponse("Fix session not found", status_code=404)
+    built = _dist_page("fix.html")
+    if built is not None:
+        return built
     session = _fs.get_fix_session(fix_id)
     scan_id = session.get("scan_id", "") if session else ""
     return templates.TemplateResponse(request, "fix.html", {

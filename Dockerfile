@@ -8,10 +8,20 @@
 #       --source . \
 #       --region europe-north1 \
 #       --allow-unauthenticated \
-#       --set-env-vars ANTHROPIC_API_KEY=sk-ant-...
+#       --set-env-vars GEMINI_API_KEY=...,LAUNCHSAFE_LLM_MODEL=gemini-3-flash-preview
 #
 # Cloud Run injects PORT (default 8080); we bind uvicorn to it.
+#
+# Frontend: multi-stage build runs Vite; FastAPI serves dist/*.html and /assets/*.
 # =============================================================================
+
+FROM node:22-alpine AS frontend-build
+
+WORKDIR /app/frontend
+COPY frontend/package.json ./
+RUN npm install
+COPY frontend/ ./
+RUN npm run build
 
 FROM python:3.12-slim AS runtime
 
@@ -22,7 +32,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8080
 
 # git is required by GitPython (clone_github) at runtime.
-# build-essential keeps wheels building if any dep ships only sdists.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -33,9 +42,8 @@ WORKDIR /app
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 
-# Copy application code (backend + frontend sibling dirs)
 COPY backend /app/backend
-COPY frontend /app/frontend
+COPY --from=frontend-build /app/frontend/dist /app/frontend/dist
 
 # Run as non-root
 RUN useradd --system --no-create-home --uid 1001 launchsafe \

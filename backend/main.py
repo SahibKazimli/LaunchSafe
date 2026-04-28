@@ -68,7 +68,14 @@ setup_event_bus()
 # Mount routes
 app.include_router(router)
 
-# Serve static assets if the directory exists
+# Vite production build: hashed JS/CSS under /assets (see Dockerfile frontend stage)
+_BACKEND_ROOT = Path(__file__).resolve().parent
+_FE_DIST = (_BACKEND_ROOT.parent / "frontend" / "dist").resolve()
+_FE_ASSETS = _FE_DIST / "assets"
+if _FE_ASSETS.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(_FE_ASSETS)), name="frontend_assets")
+
+# Optional extra static dir (not used by default)
 _STATIC = Path(__file__).resolve().parent / "static"
 if _STATIC.is_dir():
     app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")

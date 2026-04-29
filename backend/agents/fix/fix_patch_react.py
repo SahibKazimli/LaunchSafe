@@ -33,17 +33,17 @@ MAX_FIX_READ_BATCH = 10
 _fix_patch_react_agent: Any | None = None
 
 
-def _tc_name(tc: Any) -> str:
-    if isinstance(tc, dict):
-        return str(tc.get("name") or "")
-    return str(getattr(tc, "name", "") or "")
+def _tool_call_name(tool_call: Any) -> str:
+    if isinstance(tool_call, dict):
+        return str(tool_call.get("name") or "")
+    return str(getattr(tool_call, "name", "") or "")
 
 
-def _tc_args(tc: Any) -> dict[str, Any]:
-    if isinstance(tc, dict):
-        raw = tc.get("args")
+def _tool_call_args(tool_call: Any) -> dict[str, Any]:
+    if isinstance(tool_call, dict):
+        raw = tool_call.get("args")
     else:
-        raw = getattr(tc, "args", None)
+        raw = getattr(tool_call, "args", None)
     if raw is None:
         return {}
     if isinstance(raw, dict):
@@ -58,34 +58,36 @@ def _tc_args(tc: Any) -> dict[str, Any]:
 
 
 def _record_read_from_tool_pair(
-    tc: Any,
-    tm: ToolMessage,
+    tool_call: Any,
+    tool_message: ToolMessage,
     files: dict[str, str],
     keys: set[str],
 ) -> None:
-    name = _tc_name(tc)
+    name = _tool_call_name(tool_call)
     try:
-        payload = json.loads(tm.content) if isinstance(tm.content, str) else {}
+        payload = (
+            json.loads(tool_message.content) if isinstance(tool_message.content, str) else {}
+        )
     except json.JSONDecodeError:
         return
     if not isinstance(payload, dict) or payload.get("error"):
         return
 
     if name == "fix_read_file":
-        path_hint = _tc_args(tc).get("path") or payload.get("path") or ""
-        key, _ = find_file_content(str(path_hint), files)
-        if key:
-            keys.add(key)
+        path_hint = _tool_call_args(tool_call).get("path") or payload.get("path") or ""
+        file_key, _ = find_file_content(str(path_hint), files)
+        if file_key:
+            keys.add(file_key)
         return
 
     if name == "fix_read_files":
-        for ent in payload.get("files") or []:
-            if not isinstance(ent, dict):
+        for file_record in payload.get("files") or []:
+            if not isinstance(file_record, dict):
                 continue
-            p = ent.get("path") or ""
-            key, _ = find_file_content(str(p), files)
-            if key:
-                keys.add(key)
+            nested_path = file_record.get("path") or ""
+            file_key, _ = find_file_content(str(nested_path), files)
+            if file_key:
+                keys.add(file_key)
 
 
 def collect_fix_react_canonical_keys_read(messages: list[Any], files: dict[str, str]) -> set[str]:
@@ -118,13 +120,13 @@ def edits_tool_grounding_ok(
     """True when every edited locate target's file was read via fix_read_* tools."""
     required: set[str] = set()
     for edit in edits:
-        idx = edit.index
-        if not isinstance(idx, int) or idx < 0 or idx >= len(validated_pairs):
+        pair_index = edit.index
+        if not isinstance(pair_index, int) or pair_index < 0 or pair_index >= len(validated_pairs):
             continue
-        path = validated_pairs[idx][0]
-        key = resolve_path_to_canonical_key(path, files)
-        if key:
-            required.add(key)
+        path = validated_pairs[pair_index][0]
+        file_key = resolve_path_to_canonical_key(path, files)
+        if file_key:
+            required.add(file_key)
     if not required:
         return True, ""
     missing = sorted(required - keys_read)
@@ -172,13 +174,13 @@ def grep_repo(
 def fix_read_file(path: str, state: Annotated[dict, InjectedState]) -> str:
     """Read one file from the ingested snapshot (paths may be suffix-matched like scan locations)."""
     files = state.get("files", {})
-    key, content = find_file_content(path, files)
+    file_key, content = find_file_content(path, files)
     if not content:
         return json.dumps({"error": f"file not in repo: {path}"})
     cap = FIX_PATCH_REACT_READ_CAP
     truncated = len(content) > cap
     body = content[:cap] + ("\n...[truncated]" if truncated else "")
-    return json.dumps({"path": key, "content": body, "truncated": truncated})
+    return json.dumps({"path": file_key, "content": body, "truncated": truncated})
 
 
 @tool
@@ -192,7 +194,7 @@ def fix_read_files(paths: list[str], state: Annotated[dict, InjectedState]) -> s
     budget = FIX_PATCH_REACT_BATCH_BYTES
 
     for path in paths[:MAX_FIX_READ_BATCH]:
-        key, content = find_file_content(path, repo)
+        file_key, content = find_file_content(path, repo)
         if not content:
             skipped.append(path)
             continue
@@ -203,7 +205,7 @@ def fix_read_files(paths: list[str], state: Annotated[dict, InjectedState]) -> s
             skipped.append(path)
             continue
         total += chunk_len
-        out.append({"path": key, "content": body, "truncated": truncated})
+        out.append({"path": file_key, "content": body, "truncated": truncated})
 
     for path in paths[MAX_FIX_READ_BATCH:]:
         skipped.append(path)
@@ -261,8 +263,8 @@ async def run_fix_patch_react_edit(
     except Exception as exc:  # noqa: BLE001
         return None, set(), f"ReAct patch agent failed: {exc!s:.200}"
 
-    msgs = final.get("messages") or []
-    keys = collect_fix_react_canonical_keys_read(msgs, files)
+    final_messages = final.get("messages") or []
+    keys = collect_fix_react_canonical_keys_read(final_messages, files)
     structured = final.get("structured_response")
     if structured is None:
         return None, keys, "ReAct patch agent returned no structured PatchEditBundle"

@@ -23,13 +23,13 @@ REFUSAL_PHRASES: tuple[str, ...] = (
 
 def substantive_touches_non_manifest_code(patch_results: list[dict[str, Any]]) -> bool:
     """True if any substantive patch edits something other than lockfiles/manifests."""
-    for pr in patch_results:
-        for p in pr.get("patches") or []:
-            if not isinstance(p, dict):
+    for patch_result in patch_results:
+        for p in patch_result.get("patches") or []:
+            if not isinstance(patch, dict):
                 continue
-            if not patch_dict_is_code_substantive(p):
+            if not patch_dict_is_code_substantive(patch):
                 continue
-            path_key = str(p.get("path") or "")
+            path_key = str(patch.get("path") or "")
             if is_manifest_file_key(path_key):
                 continue
             return True
@@ -72,9 +72,9 @@ def evaluate_fix_session_quality(
 
     if substantive and substantive_touches_non_manifest_code(patch_results):
         tests_ok = False
-        for pr in patch_results:
-            tt = (pr.get("tests_touched") or "").strip().lower()
-            if tt and tt not in ("none", "n/a", "not applicable", "n/a."):
+        for patch_result in patch_results:
+            tests_touched = (patch_result.get("tests_touched") or "").strip().lower()
+            if tests_touched and tests_touched not in ("none", "n/a", "not applicable", "n/a."):
                 tests_ok = True
                 break
         if not tests_ok:
@@ -83,18 +83,18 @@ def evaluate_fix_session_quality(
                 "policy assertions (not 'none'). Manifest-only bumps are exempt."
             )
 
-    for pr in patch_results:
-        patches = pr.get("patches") or []
+    for patch_result in patch_results:
+        patches = patch_result.get("patches") or []
         if patches:
             continue
-        notes = (pr.get("notes") or "").lower()
-        ev = (pr.get("search_evidence") or "").strip()
-        if not any(phrase in notes for phrase in REFUSAL_PHRASES):
+        notes = (patch_result.get("notes") or "").lower()
+        evidence = (patch_result.get("search_evidence") or "").strip()
+        if not any(refusal_phrase in notes for refusal_phrase in REFUSAL_PHRASES):
             continue
-        if not ev:
-            gid = pr.get("group_id", "?")
+        if not evidence:
+            group_id = patch_result.get("group_id", "?")
             violations.append(
-                f"Group {gid}: refusal-style notes without repo-wide search_evidence."
+                f"Group {group_id}: refusal-style notes without repo-wide search_evidence."
             )
 
     return violations

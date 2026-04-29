@@ -93,17 +93,17 @@ def collect_fix_react_canonical_keys_read(messages: list[Any], files: dict[str, 
     keys: set[str] = set()
     i = 0
     while i < len(messages):
-        m = messages[i]
-        if isinstance(m, AIMessage) and m.tool_calls:
-            n = len(m.tool_calls)
-            for k, tc in enumerate(m.tool_calls):
-                j = i + 1 + k
-                if j >= len(messages):
+        message = messages[i]
+        if isinstance(message, AIMessage) and message.tool_calls:
+            tool_call_count = len(message.tool_calls)
+            for tool_call_index, tool_call in enumerate(message.tool_calls):
+                message_index = i + 1 + tool_call_index
+                if message_index >= len(messages):
                     break
-                tm = messages[j]
-                if isinstance(tm, ToolMessage):
-                    _record_read_from_tool_pair(tc, tm, files, keys)
-            i += 1 + n
+                tool_message = messages[message_index]
+                if isinstance(tool_message, ToolMessage):
+                    _record_read_from_tool_pair(tool_call, tool_message, files, keys)
+            i += 1 + tool_call_count
             continue
         i += 1
     return keys
@@ -117,14 +117,14 @@ def edits_tool_grounding_ok(
 ) -> tuple[bool, str]:
     """True when every edited locate target's file was read via fix_read_* tools."""
     required: set[str] = set()
-    for ed in edits:
-        idx = ed.index
+    for edit in edits:
+        idx = edit.index
         if not isinstance(idx, int) or idx < 0 or idx >= len(validated_pairs):
             continue
         path = validated_pairs[idx][0]
-        k = resolve_path_to_canonical_key(path, files)
-        if k:
-            required.add(k)
+        key = resolve_path_to_canonical_key(path, files)
+        if key:
+            required.add(key)
     if not required:
         return True, ""
     missing = sorted(required - keys_read)
@@ -150,14 +150,14 @@ def grep_repo(
     n = 0
     for path, content in files.items():
         hay = content if not case_insensitive else content.lower()
-        nd = needle if not case_insensitive else needle.lower()
-        if nd not in hay:
+        needle_lower = needle if not case_insensitive else needle.lower()
+        if needle_lower not in hay:
             continue
         # first line match
         for li, line in enumerate(content.splitlines(), start=1):
-            lcmp = line if not case_insensitive else line.lower()
-            if nd in lcmp:
-                excerpt = line.strip()
+            line_lower = line if not case_insensitive else line.lower()
+            if needle_lower in line_lower:
+                excerpt = line_lower.strip()
                 if len(excerpt) > 200:
                     excerpt = excerpt[:200] + "…"
                 hits.append({"path": path, "line": li, "excerpt": excerpt})

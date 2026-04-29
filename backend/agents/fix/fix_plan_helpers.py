@@ -72,36 +72,36 @@ def ensure_fix_group_metadata(groups: list[dict], findings: list[dict]) -> None:
                     return t
         return ""
 
-    for i, g in enumerate(groups or []):
-        if not isinstance(g, dict):
+    for i, group in enumerate(groups or []):
+        if not isinstance(group, dict):
             continue
-        indices = [x for x in (g.get("finding_indices") or []) if isinstance(x, int)]
+        indices = [x for x in (group.get("finding_indices") or []) if isinstance(x, int)]
         first_title = _first_title(indices)
-        label = (g.get("label") or "").strip()
+        label = (group.get("label") or "").strip()
         if not label and first_title:
-            g["label"] = first_title[:220]
-            label = g["label"]
-        gid = (g.get("group_id") or "").strip()
-        generic = bool(re.fullmatch(r"fix-\d+", gid))
-        if (not gid or generic) and (label or first_title):
+            group["label"] = first_title[:220]
+            label = group["label"]
+        group_id = (group.get("group_id") or "").strip()
+        generic = bool(re.fullmatch(r"fix-\d+", group_id))
+        if (not group_id or generic) and (label or first_title):
             base = slugify_title_for_group_id(label or first_title, i)
             new_id = base
             suffix = 1
             while new_id in used:
                 new_id = f"{base}-d{suffix}"
                 suffix += 1
-            g["group_id"] = new_id
-            gid = new_id
-        elif not gid:
+            group["group_id"] = new_id
+            group_id = new_id
+        elif not group_id:
             base = slugify_title_for_group_id(f"group-{i}", i)
             new_id = base
             suffix = 1
             while new_id in used:
                 new_id = f"{base}-d{suffix}"
                 suffix += 1
-            g["group_id"] = new_id
-            gid = new_id
-        used.add(gid)
+            group["group_id"] = new_id
+            group_id = new_id
+        used.add(group_id)
 
 
 def file_key_basename(file_key: str) -> str:

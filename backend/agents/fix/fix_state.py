@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from langgraph.prebuilt.chat_agent_executor import AgentState
 
 
-# ── Pydantic models (structured LLM output) ──────────────────────────
+# Pydantic models    
 
 
 class FixPatchReactState(AgentState):

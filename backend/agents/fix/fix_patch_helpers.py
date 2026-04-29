@@ -361,15 +361,17 @@ def _py_line_starts_with(text: str, kind: str) -> int:
 
 def patch_fails_sanity_gate(original: str, patched: str) -> bool:
     """True if the edit likely drops error handling or returns (unsafe to apply)."""
-    o, p = original or "", patched or ""
-    r0, r1 = _py_line_starts_with(o, "return"), _py_line_starts_with(p, "return")
-    x0, x1 = _py_line_starts_with(o, "raise"), _py_line_starts_with(p, "raise")
-    if r0 >= 1 and r1 < r0:
-        if x1 < x0:
+    original_text, patched_text = original or "", patched or ""
+    original_return_count = _py_line_starts_with(original_text, "return")
+    patched_return_count = _py_line_starts_with(patched_text, "return")
+    original_raise_count = _py_line_starts_with(original_text, "raise")
+    patched_raise_count = _py_line_starts_with(patched_text, "raise")
+    if original_return_count >= 1 and patched_return_count < original_return_count:
+        if patched_raise_count < original_raise_count:
             return True
-        if "HTTPException" in o and "HTTPException" not in p:
+        if "HTTPException" in original_text and "HTTPException" not in patched_text:
             return True
-    if "HTTPException" in o and "HTTPException" not in p and x1 < x0:
+    if "HTTPException" in original_text and "HTTPException" not in patched_text and patched_raise_count < original_raise_count:
         return True
     return False
 
@@ -401,20 +403,20 @@ def patch_sanity_warnings(original: str, patched: str) -> list[str]:
     if patch_fails_sanity_gate(original, patched):
         return []
     uplift = _patch_adds_security_controls(patched)
-    w: list[str] = []
-    o, p = original or "", patched or ""
-    if _py_line_starts_with(o, "raise") > _py_line_starts_with(p, "raise"):
+    warnings_list: list[str] = []
+    original_text, patched_text = original or "", patched or ""
+    if _py_line_starts_with(original_text, "raise") > _py_line_starts_with(patched_text, "raise"):
         if not uplift:
-            w.append("Fewer raise statements than before — verify error handling.")
-    r_drop = _py_line_starts_with(o, "return") - _py_line_starts_with(p, "return")
+            warnings_list.append("Fewer raise statements than before — verify error handling.")
+    return_drop = _py_line_starts_with(original_text, "return") - _py_line_starts_with(patched_text, "return")
     if not uplift:
-        if r_drop >= 2:
-            w.append("Several return statements removed — verify all paths still return.")
-        elif r_drop == 1 and _py_line_starts_with(o, "raise") > _py_line_starts_with(p, "raise"):
-            w.append("Fewer return and raise statements — verify control flow and errors.")
-    if "HTTPException" in o and "HTTPException" not in p:
-        w.append("HTTPException references removed — ensure API errors are still explicit.")
-    return w
+        if return_drop >= 2:
+            warnings_list.append("Several return statements removed — verify all paths still return.")
+        elif return_drop == 1 and _py_line_starts_with(original_text, "raise") > _py_line_starts_with(patched_text, "raise"):
+            warnings_list.append("Fewer return and raise statements — verify control flow and errors.")
+    if "HTTPException" in original_text and "HTTPException" not in patched_text:
+        warnings_list.append("HTTPException references removed — ensure API errors are still explicit.")
+    return warnings_list
 
 
 def patch_dict_is_substantive(patch: dict) -> bool:
@@ -425,15 +427,15 @@ def patch_dict_is_substantive(patch: dict) -> bool:
 
 
 def _py_snippet_diff_is_comment_lines_only(original: str, patched: str) -> bool:
-    o_lines, p_lines = original.splitlines(), patched.splitlines()
-    if len(o_lines) != len(p_lines):
+    original_lines, patched_lines = original.splitlines(), patched.splitlines()
+    if len(original_lines) != len(patched_lines):
         return False
     any_diff = False
-    for ol, pl in zip(o_lines, p_lines):
-        if ol == pl:
+    for original_line, patched_line in zip(original_lines, patched_lines):
+        if original_line == patched_line:
             continue
         any_diff = True
-        if not (ol.lstrip().startswith("#") and pl.lstrip().startswith("#")):
+        if not (original_line.lstrip().startswith("#") and patched_line.lstrip().startswith("#")):
             return False
     return any_diff
 
@@ -449,15 +451,15 @@ def _c_js_snippet_diff_is_comment_lines_only(original: str, patched: str) -> boo
             return True
         return False
 
-    o_lines, p_lines = original.splitlines(), patched.splitlines()
-    if len(o_lines) != len(p_lines):
+    original_lines, patched_lines = original.splitlines(), patched.splitlines()
+    if len(original_lines) != len(patched_lines):
         return False
     any_diff = False
-    for ol, pl in zip(o_lines, p_lines):
-        if ol == pl:
+    for original_line, patched_line in zip(original_lines, patched_lines):
+        if original_line == patched_line:
             continue
         any_diff = True
-        if not (is_full_line_comment(ol) and is_full_line_comment(pl)):
+        if not (is_full_line_comment(original_line) and is_full_line_comment(patched_line)):
             return False
     return any_diff
 

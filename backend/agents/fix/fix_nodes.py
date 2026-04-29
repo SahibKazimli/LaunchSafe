@@ -188,15 +188,15 @@ async def plan_fixes_node(state: dict[str, Any]) -> dict[str, Any]:
             target_files = [resolved_key] if resolved_key else ([raw_path] if raw_path else [])
             title = str(finding.get("title") or f"Finding {index}").strip()
             base_gid = slugify_title_for_group_id(title, index)
-            gid = base_gid
+            group_id = base_gid
             dup = 1
-            while gid in used_fallback_ids:
-                gid = f"{base_gid}-d{dup}"
+            while group_id in used_fallback_ids:
+                group_id = f"{base_gid}-d{dup}"
                 dup += 1
-            used_fallback_ids.add(gid)
+            used_fallback_ids.add(group_id)
             fallback_groups.append(
                 FixGroup(
-                    group_id=gid,
+                    group_id=group_id,
                     label=title[:220],
                     finding_indices=[index],
                     target_files=target_files,
@@ -246,14 +246,14 @@ async def plan_fixes_node(state: dict[str, Any]) -> dict[str, Any]:
     ]
     seen: set[str] = set()
     merged_order: list[str] = []
-    for gid in prev_order:
-        if gid in group_ids and gid not in seen:
-            merged_order.append(gid)
-            seen.add(gid)
-    for gid in group_ids:
-        if gid not in seen:
-            merged_order.append(gid)
-            seen.add(gid)
+    for group_id in prev_order:
+        if group_id in group_ids and group_id not in seen:
+            merged_order.append(group_id)
+            seen.add(group_id)
+    for group_id in group_ids:
+        if group_id not in seen:
+            merged_order.append(group_id)
+            seen.add(group_id)
     plan_dict["execution_order"] = merged_order
 
     emit(
@@ -285,9 +285,9 @@ async def generate_patches_node(state: dict[str, Any]) -> dict[str, Any]:
 
     group_by_id = {item["group_id"]: item for item in groups}
     ordered_groups: list[dict] = []
-    for gid in execution_order:
-        if gid in group_by_id:
-            ordered_groups.append(group_by_id.pop(gid))
+    for group_id in execution_order:
+        if group_id in group_by_id:
+            ordered_groups.append(group_by_id.pop(group_id))
     ordered_groups.extend(group_by_id.values())
 
     from core import fix_store as fix_store
@@ -410,13 +410,13 @@ async def review_patches_node(state: dict[str, Any]) -> dict[str, Any]:
 
     review_dict = review.model_dump()
     sanity_bullets: list[str] = []
-    for pr in patch_results:
-        heading = (pr.get("group_label") or "").strip() or str(pr.get("group_id", ""))
-        for p in pr.get("patches") or []:
-            if not isinstance(p, dict):
+    for patch_result in patch_results:
+        heading = (patch_result.get("group_label") or "").strip() or str(patch_result.get("group_id", ""))
+        for patch in patch_result.get("patches") or []:
+            if not isinstance(patch, dict):
                 continue
-            for w in p.get("sanity_warnings") or []:
-                sanity_bullets.append(f"[{heading}] {p.get('path')}: {w}")
+            for warning in patch.get("sanity_warnings") or []:
+                sanity_bullets.append(f"[{heading}] {patch.get('path')}: {warning}")
     if sanity_bullets:
         merged_w = sanity_bullets + list(review_dict.get("warnings") or [])
         review_dict["warnings"] = merged_w

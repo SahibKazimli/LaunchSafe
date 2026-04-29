@@ -156,10 +156,10 @@ def span_for_route_hint(content: str, route_hint: str) -> str | None:
     needles = _path_needles_for_search(path_lower)
     text = _norm_crlf(content)
     lowered = text.lower()
-    for nd in needles:
-        if not nd:
+    for path_needle in needles:
+        if not path_needle:
             continue
-        pos = lowered.find(nd.lower())
+        pos = lowered.find(path_needle.lower())
         if pos < 0:
             continue
         block = expand_route_match_to_handler_block(text, pos)
@@ -249,20 +249,20 @@ def repo_wide_search_evidence(
     hits: list[str] = []
     seen: set[tuple[str, int]] = set()
     for needle in needles:
-        n = (needle or "").strip()
-        if len(n) < 2:
+        needle_stripped = (needle or "").strip()
+        if len(needle_stripped) < 2:
             continue
-        nl = n.lower()
+        needle_lower = needle_stripped.lower()
         for path, body in sorted(files.items()):
-            if nl not in _norm_crlf(body).lower():
+            if needle_lower not in _norm_crlf(body).lower():
                 continue
-            for i, line in enumerate(_norm_crlf(body).splitlines(), 1):
-                if nl in line.lower():
-                    key = (path, i)
+            for line_number, line in enumerate(_norm_crlf(body).splitlines(), 1):
+                if needle_lower in line.lower():
+                    key = (path, line_number)
                     if key in seen:
                         continue
                     seen.add(key)
-                    hits.append(f"{path}:{i}: {line.strip()[:240]}")
+                    hits.append(f"{path}:{line_number}: {line.strip()[:240]}")
                     if len(hits) >= max_lines:
                         return "\n".join(hits)
     if not hits:
@@ -290,13 +290,13 @@ def collect_evidence_needles_from_findings(findings: list[dict[str, Any]]) -> li
         for m in re.finditer(r"\b(def|async def)\s+([a-zA-Z_][a-zA-Z0-9_]*)\b", blob):
             needles.append(m.group(2))
     seen: set[str] = set()
-    out: list[str] = []
-    for n in needles:
-        s = n.strip()
-        if len(s) < 2 or s.lower() in seen:
+    deduped_needles: list[str] = []
+    for raw_needle in needles:
+        needle_text = raw_needle.strip()
+        if len(needle_text) < 2 or needle_text.lower() in seen:
             continue
-        seen.add(s.lower())
-        out.append(s)
-        if len(out) >= 48:
+        seen.add(needle_text.lower())
+        deduped_needles.append(needle_text)
+        if len(deduped_needles) >= 48:
             break
-    return out
+    return deduped_needles

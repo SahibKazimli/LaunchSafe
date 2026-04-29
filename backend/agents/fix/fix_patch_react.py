@@ -149,23 +149,23 @@ def grep_repo(
     files = state.get("files", {})
     max_hits = max(1, min(int(max_hits), 80))
     hits: list[dict[str, Any]] = []
-    n = 0
+    hit_count = 0
     for path, content in files.items():
         hay = content if not case_insensitive else content.lower()
         needle_lower = needle if not case_insensitive else needle.lower()
         if needle_lower not in hay:
             continue
         # first line match
-        for li, line in enumerate(content.splitlines(), start=1):
+        for line_index, line in enumerate(content.splitlines(), start=1):
             line_lower = line if not case_insensitive else line.lower()
             if needle_lower in line_lower:
                 excerpt = line_lower.strip()
                 if len(excerpt) > 200:
                     excerpt = excerpt[:200] + "…"
-                hits.append({"path": path, "line": li, "excerpt": excerpt})
-                n += 1
+                hits.append({"path": path, "line": line_index, "excerpt": excerpt})
+                hit_count += 1
                 break
-        if n >= max_hits:
+        if hit_count >= max_hits:
             break
     return json.dumps({"substring": substring, "hits": hits, "count": len(hits)})
 
